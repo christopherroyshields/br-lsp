@@ -14,3 +14,5 @@ dashmap = "6.1.0"
 log = "0.4.14"
 anyhow = "1.0.93"
 thiserror = "2.0.3"
+tree-sitter = "0.25"
+tree-sitter-br = { path = "../tree-sitter-br" }
