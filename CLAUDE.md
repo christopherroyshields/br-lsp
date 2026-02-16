@@ -32,12 +32,31 @@ BR source files use `.brs` and `.wbs` extensions and are encoded with CP437.
 
 ## Architecture
 
-### Rust LSP Server (`src/main.rs`)
-Single-binary server using `tower-lsp`. The `Backend` struct implements the `LanguageServer` trait and holds:
-- `client: Client` — tower-lsp client handle for sending notifications (diagnostics, etc.) back to the editor
-- `document_map: DashMap<String, Rope>` — concurrent map of open document URIs to their content (using `ropey` for efficient text manipulation)
+### Rust LSP Server
+Single-binary server using `tower-lsp`, organized across four modules:
 
-The server communicates over stdin/stdout. Document sync uses `TextDocumentSyncKind::FULL` (entire document content sent on each change). The `on_change` method is the central hook called on document open/edit — this is where parsing, diagnostics, and analysis should be wired in.
+- **`src/main.rs`** — entry point, wires up `Backend` with `LspService` over stdin/stdout
+- **`src/backend.rs`** — `Backend` struct implementing `LanguageServer` trait, `DocumentState`, and all LSP method handlers
+- **`src/parser.rs`** — tree-sitter integration: parser creation, parsing, diagnostics collection, and query helpers (`run_query`, `node_at_position`)
+- **`src/references.rs`** — "find all references" logic with scope-aware variable resolution (function parameters vs. module-level)
+
+The `Backend` struct holds:
+- `client: Client` — tower-lsp client handle for sending notifications back to the editor
+- `document_map: DashMap<String, DocumentState>` — concurrent map of open document URIs to their state
+- `parser: Mutex<Parser>` — shared tree-sitter parser (Parser is `Send` but not `Sync`)
+
+`DocumentState` stores per-document data:
+- `rope: Rope` — efficient text representation
+- `source: String` — raw source text (used for tree-sitter queries)
+- `tree: Option<Tree>` — parsed tree-sitter AST
+
+The `on_change` method reparses the full document on each edit (`TextDocumentSyncKind::FULL`), collects diagnostics from tree-sitter error/missing nodes, and publishes them.
+
+**Currently implemented LSP capabilities:**
+- Text document sync (full)
+- Diagnostics (syntax errors from tree-sitter)
+- Find references (functions, labels, line numbers, variables — scope-aware)
+- Completion provider (registered but returns `None`)
 
 ### VS Code Extension Client (`client/src/extension.ts`)
 Thin client that spawns the `br-lsp` binary and connects via `vscode-languageclient`. Watches `**/*.{brs,wbs}` files. The server binary path can be overridden via the `SERVER_PATH` environment variable.

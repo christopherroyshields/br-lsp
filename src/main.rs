@@ -1,10 +1,16 @@
 mod backend;
+mod extract;
 mod parser;
 mod references;
+mod workspace;
+
+use std::sync::Arc;
 
 use backend::Backend;
 use dashmap::DashMap;
+use tokio::sync::RwLock;
 use tower_lsp::{LspService, Server};
+use workspace::WorkspaceIndex;
 
 #[tokio::main]
 async fn main() {
@@ -17,6 +23,8 @@ async fn main() {
         client,
         document_map: DashMap::new(),
         parser: std::sync::Mutex::new(parser::new_parser()),
+        workspace_index: Arc::new(RwLock::new(WorkspaceIndex::new())),
+        workspace_folders: Arc::new(RwLock::new(Vec::new())),
     })
     .finish();
 

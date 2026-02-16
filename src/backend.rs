@@ -1,16 +1,19 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use dashmap::DashMap;
-use log::debug;
+use log::{debug, error, warn};
 use ropey::Rope;
 use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::*;
+use tower_lsp::lsp_types::{notification, request, *};
 use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Tree;
+use walkdir::WalkDir;
 
+use crate::extract;
 use crate::parser;
 use crate::references;
+use crate::workspace::{self, WorkspaceIndex};
 
 pub struct DocumentState {
     #[allow(dead_code)]
@@ -24,6 +27,8 @@ pub struct Backend {
     pub client: Client,
     pub document_map: DashMap<String, DocumentState>,
     pub parser: Mutex<tree_sitter::Parser>,
+    pub workspace_index: Arc<tokio::sync::RwLock<WorkspaceIndex>>,
+    pub workspace_folders: Arc<tokio::sync::RwLock<Vec<Url>>>,
 }
 
 struct TextDocumentItem {
@@ -45,6 +50,13 @@ impl Backend {
             .map(|t| parser::collect_diagnostics(t, &params.text))
             .unwrap_or_default();
 
+        // Update workspace index with definitions from this file
+        if let Some(t) = tree.as_ref() {
+            let defs = extract::extract_definitions(t, &params.text);
+            let mut index = self.workspace_index.write().await;
+            index.update_file(&params.uri, defs);
+        }
+
         let uri_string = params.uri.to_string();
         self.document_map.insert(
             uri_string,
@@ -59,11 +71,76 @@ impl Backend {
             .publish_diagnostics(params.uri, diagnostics, None)
             .await;
     }
+
+    fn scan_workspace_folder(
+        folder: &Url,
+        parser: &mut tree_sitter::Parser,
+        files_scanned: &mut usize,
+    ) -> Vec<(Url, Vec<extract::FunctionDef>)> {
+        let path = match folder.to_file_path() {
+            Ok(p) => p,
+            Err(()) => {
+                warn!("Cannot convert workspace folder URI to path: {folder}");
+                return Vec::new();
+            }
+        };
+
+        let mut results = Vec::new();
+        for entry in WalkDir::new(&path)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let file_path = entry.path();
+            if !entry.file_type().is_file() || !workspace::is_br_file(file_path) {
+                continue;
+            }
+
+            *files_scanned += 1;
+
+            let source = match workspace::read_br_file(file_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("Failed to read {}: {e}", file_path.display());
+                    continue;
+                }
+            };
+
+            let tree = match parser::parse(parser, &source, None) {
+                Some(t) => t,
+                None => continue,
+            };
+
+            let defs = extract::extract_definitions(&tree, &source);
+            if defs.is_empty() {
+                continue;
+            }
+
+            let uri = match Url::from_file_path(file_path) {
+                Ok(u) => u,
+                Err(()) => continue,
+            };
+
+            results.push((uri, defs));
+        }
+
+        results
+    }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        // Capture workspace folders
+        let mut folders = self.workspace_folders.write().await;
+        if let Some(wf) = params.workspace_folders {
+            for folder in wf {
+                folders.push(folder.uri);
+            }
+        } else if let Some(root_uri) = params.root_uri {
+            folders.push(root_uri);
+        }
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "br-lsp".to_string(),
@@ -103,6 +180,103 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         debug!("initialized!");
+
+        // Register file watcher for .brs and .wbs files
+        let registrations = vec![Registration {
+            id: "br-file-watcher".to_string(),
+            method: "workspace/didChangeWatchedFiles".to_string(),
+            register_options: Some(
+                serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                    watchers: vec![
+                        FileSystemWatcher {
+                            glob_pattern: GlobPattern::String("**/*.brs".to_string()),
+                            kind: Some(WatchKind::all()),
+                        },
+                        FileSystemWatcher {
+                            glob_pattern: GlobPattern::String("**/*.wbs".to_string()),
+                            kind: Some(WatchKind::all()),
+                        },
+                    ],
+                })
+                .unwrap(),
+            ),
+        }];
+
+        if let Err(e) = self.client.register_capability(registrations).await {
+            warn!("Failed to register file watcher: {e}");
+        }
+
+        // Spawn background workspace scan
+        let folders = self.workspace_folders.read().await.clone();
+        let index = self.workspace_index.clone();
+        let client = self.client.clone();
+
+        tokio::spawn(async move {
+            let token = NumberOrString::String("workspace-indexing".to_string());
+
+            // Create progress token
+            let _ = client
+                .send_request::<request::WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
+                    token: token.clone(),
+                })
+                .await;
+
+            // Begin progress
+            client
+                .send_notification::<notification::Progress>(ProgressParams {
+                    token: token.clone(),
+                    value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(
+                        WorkDoneProgressBegin {
+                            title: "Indexing BR files".to_string(),
+                            cancellable: Some(false),
+                            message: Some("Scanning workspace...".to_string()),
+                            percentage: None,
+                        },
+                    )),
+                })
+                .await;
+
+            let start = std::time::Instant::now();
+            let mut parser = parser::new_parser();
+            let mut total = 0usize;
+            let mut total_files_scanned = 0usize;
+
+            for folder in &folders {
+                let file_defs =
+                    Self::scan_workspace_folder(folder, &mut parser, &mut total_files_scanned);
+                let count = file_defs.len();
+
+                let mut idx = index.write().await;
+                for (uri, defs) in file_defs {
+                    idx.add_file(&uri, defs);
+                }
+                total += count;
+            }
+
+            let elapsed = start.elapsed();
+            let summary = format!(
+                "scanned {total_files_scanned} files, {total} contain definitions ({elapsed:.1?})"
+            );
+
+            // End progress
+            client
+                .send_notification::<notification::Progress>(ProgressParams {
+                    token,
+                    value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(
+                        WorkDoneProgressEnd {
+                            message: Some(summary.clone()),
+                        },
+                    )),
+                })
+                .await;
+
+            client
+                .log_message(
+                    MessageType::INFO,
+                    format!("Workspace indexing complete: {summary}"),
+                )
+                .await;
+        });
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -178,12 +352,122 @@ impl LanguageServer for Backend {
         debug!("configuration changed!");
     }
 
-    async fn did_change_workspace_folders(&self, _: DidChangeWorkspaceFoldersParams) {
+    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
         debug!("workspace folders changed!");
+
+        let event = params.event;
+
+        // Remove files from removed folders
+        if !event.removed.is_empty() {
+            let mut folders = self.workspace_folders.write().await;
+            let mut index = self.workspace_index.write().await;
+
+            for removed in &event.removed {
+                folders.retain(|f| f != &removed.uri);
+
+                // Remove all indexed definitions under this folder
+                let folder_str = removed.uri.as_str();
+                let to_remove: Vec<Url> = index
+                    .all_symbols()
+                    .iter()
+                    .filter(|s| s.uri.as_str().starts_with(folder_str))
+                    .map(|s| s.uri.clone())
+                    .collect();
+
+                for uri in to_remove {
+                    index.remove_file(&uri);
+                }
+            }
+        }
+
+        // Scan added folders
+        if !event.added.is_empty() {
+            let new_folders: Vec<Url> = event.added.iter().map(|f| f.uri.clone()).collect();
+
+            {
+                let mut folders = self.workspace_folders.write().await;
+                folders.extend(new_folders.clone());
+            }
+
+            let index = self.workspace_index.clone();
+            let client = self.client.clone();
+
+            tokio::spawn(async move {
+                let start = std::time::Instant::now();
+                let mut parser = parser::new_parser();
+                let mut total = 0usize;
+                let mut total_files_scanned = 0usize;
+
+                for folder in &new_folders {
+                    let file_defs = Self::scan_workspace_folder(
+                        folder,
+                        &mut parser,
+                        &mut total_files_scanned,
+                    );
+                    let count = file_defs.len();
+
+                    let mut idx = index.write().await;
+                    for (uri, defs) in file_defs {
+                        idx.add_file(&uri, defs);
+                    }
+                    total += count;
+                }
+
+                let elapsed = start.elapsed();
+                client
+                    .log_message(
+                        MessageType::INFO,
+                        format!(
+                            "Workspace folder scan complete in {elapsed:.1?}: scanned {total_files_scanned} files, {total} contain definitions"
+                        ),
+                    )
+                    .await;
+            });
+        }
     }
 
-    async fn did_change_watched_files(&self, _: DidChangeWatchedFilesParams) {
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         debug!("watched files have changed!");
+
+        for change in params.changes {
+            match change.typ {
+                FileChangeType::DELETED => {
+                    let mut index = self.workspace_index.write().await;
+                    index.remove_file(&change.uri);
+                }
+                FileChangeType::CREATED | FileChangeType::CHANGED => {
+                    // Skip if the file is currently open — editor content takes precedence
+                    if self.document_map.contains_key(&change.uri.to_string()) {
+                        continue;
+                    }
+
+                    let file_path = match change.uri.to_file_path() {
+                        Ok(p) => p,
+                        Err(()) => continue,
+                    };
+
+                    let source = match workspace::read_br_file(&file_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            error!("Failed to read {}: {e}", file_path.display());
+                            continue;
+                        }
+                    };
+
+                    let tree = {
+                        let mut parser = self.parser.lock().unwrap();
+                        parser::parse(&mut parser, &source, None)
+                    };
+
+                    if let Some(t) = tree {
+                        let defs = extract::extract_definitions(&t, &source);
+                        let mut index = self.workspace_index.write().await;
+                        index.update_file(&change.uri, defs);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     async fn execute_command(&self, _: ExecuteCommandParams) -> Result<Option<Value>> {

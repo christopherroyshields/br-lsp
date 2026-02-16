@@ -10,6 +10,8 @@ import {
 let client: LanguageClient;
 
 export async function activate(_context: ExtensionContext) {
+  const outputChannel = window.createOutputChannel("BR Language Server");
+  outputChannel.appendLine("Starting BR Language Server...");
   const traceOutputChannel = window.createOutputChannel("BR Language Server trace");
   const command = process.env.SERVER_PATH || "br-lsp";
   const run: Executable = {
@@ -33,6 +35,7 @@ export async function activate(_context: ExtensionContext) {
     synchronize: {
       fileEvents: workspace.createFileSystemWatcher("**/*.{brs,wbs}"),
     },
+    outputChannel,
     traceOutputChannel,
   };
 
