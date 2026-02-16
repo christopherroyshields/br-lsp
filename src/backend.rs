@@ -2,15 +2,16 @@ use std::sync::{Arc, Mutex};
 
 use dashmap::DashMap;
 use log::{debug, error, warn};
+use rayon::prelude::*;
 use ropey::Rope;
 use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{notification, request, *};
 use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Tree;
-use rayon::prelude::*;
 use walkdir::WalkDir;
 
+use crate::builtins;
 use crate::extract;
 use crate::parser;
 use crate::references;
@@ -20,7 +21,6 @@ pub struct DocumentState {
     #[allow(dead_code)]
     pub rope: Rope,
     pub source: String,
-    #[allow(dead_code)]
     pub tree: Option<Tree>,
 }
 
@@ -159,6 +159,12 @@ impl LanguageServer for Backend {
                     all_commit_characters: None,
                     completion_item: None,
                 }),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".into(), ",".into()]),
+                    retrigger_characters: None,
+                    work_done_progress_options: Default::default(),
+                }),
                 references_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 workspace: Some(WorkspaceServerCapabilities {
@@ -236,8 +242,7 @@ impl LanguageServer for Backend {
             let mut total_files_scanned = 0usize;
 
             for folder in &folders {
-                let file_defs =
-                    Self::scan_workspace_folder(folder, &mut total_files_scanned);
+                let file_defs = Self::scan_workspace_folder(folder, &mut total_files_scanned);
                 let count = file_defs.len();
 
                 let mut idx = index.write().await;
@@ -342,6 +347,179 @@ impl LanguageServer for Backend {
         Ok(locations)
     }
 
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri_string = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let position = params.text_document_position_params.position;
+
+        let doc = match self.document_map.get(&uri_string) {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+        let tree = match doc.tree.as_ref() {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        // Find function_name node at cursor
+        let mut node = match parser::node_at_position(
+            tree,
+            position.line as usize,
+            position.character as usize,
+        ) {
+            Some(n) => n,
+            None => return Ok(None),
+        };
+
+        // Walk up to find a function_name node
+        loop {
+            if node.kind() == "function_name" {
+                break;
+            }
+            match node.parent() {
+                Some(p) => node = p,
+                None => return Ok(None),
+            }
+        }
+
+        let fn_name = match node.utf8_text(doc.source.as_bytes()) {
+            Ok(s) => s,
+            Err(_) => return Ok(None),
+        };
+        let fn_name_range = parser::node_range(node);
+
+        // Check parent to determine if system or user function
+        let parent = match node.parent() {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let markdown = match parent.kind() {
+            "numeric_system_function" | "string_system_function" => {
+                let builtins = builtins::lookup(fn_name);
+                if builtins.is_empty() {
+                    return Ok(None);
+                }
+                format_builtin_hover(builtins)
+            }
+            _ => {
+                // User function — look up in workspace index
+                let index = self.workspace_index.read().await;
+                let defs = index.lookup(fn_name);
+                if defs.is_empty() {
+                    return Ok(None);
+                }
+                format_user_hover(&defs[0].def)
+            }
+        };
+
+        Ok(Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: markdown,
+            }),
+            range: Some(fn_name_range),
+        }))
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let uri_string = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let position = params.text_document_position_params.position;
+
+        let doc = match self.document_map.get(&uri_string) {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+
+        // Try tree-based approach first
+        let call_ctx = doc
+            .tree
+            .as_ref()
+            .and_then(|tree| {
+                let cursor_node = parser::node_at_position(
+                    tree,
+                    position.line as usize,
+                    position.character as usize,
+                )?;
+
+                // Walk up to find an arguments node
+                let mut node = cursor_node;
+                let args_node = loop {
+                    if node.kind() == "arguments" {
+                        break node;
+                    }
+                    node = node.parent()?;
+                };
+
+                let call_node = args_node.parent()?;
+
+                let mut cursor = call_node.walk();
+                let fn_name_node = call_node
+                    .children(&mut cursor)
+                    .find(|c| c.kind() == "function_name")?;
+
+                let fn_name = fn_name_node.utf8_text(doc.source.as_bytes()).ok()?;
+
+                // Count commas before cursor to determine active parameter
+                let mut count = 0u32;
+                let mut cursor = args_node.walk();
+                for child in args_node.children(&mut cursor) {
+                    if !child.is_named()
+                        && child.utf8_text(doc.source.as_bytes()).ok() == Some(",")
+                        && child.end_position().column as u32 <= position.character
+                        && child.end_position().row as u32 <= position.line
+                    {
+                        count += 1;
+                    }
+                }
+
+                Some(parser::CallContext {
+                    name: fn_name.to_string(),
+                    active_param: count,
+                })
+            })
+            // Fall back to text-based scanning when tree walk fails
+            .or_else(|| {
+                parser::find_function_call_context(
+                    &doc.source,
+                    position.line as usize,
+                    position.character as usize,
+                )
+            });
+
+        let call_ctx = match call_ctx {
+            Some(ctx) => ctx,
+            None => return Ok(None),
+        };
+
+        let signatures = {
+            let builtins = builtins::lookup(&call_ctx.name);
+            if !builtins.is_empty() {
+                build_builtin_signatures(builtins, call_ctx.active_param)
+            } else {
+                let index = self.workspace_index.read().await;
+                let defs = index.lookup(&call_ctx.name);
+                if defs.is_empty() {
+                    return Ok(None);
+                }
+                build_user_signatures(&defs[0].def, call_ctx.active_param)
+            }
+        };
+
+        Ok(Some(SignatureHelp {
+            signatures,
+            active_signature: Some(0),
+            active_parameter: Some(call_ctx.active_param),
+        }))
+    }
+
     async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
         debug!("configuration changed!");
     }
@@ -392,10 +570,7 @@ impl LanguageServer for Backend {
                 let mut total_files_scanned = 0usize;
 
                 for folder in &new_folders {
-                    let file_defs = Self::scan_workspace_folder(
-                        folder,
-                        &mut total_files_scanned,
-                    );
+                    let file_defs = Self::scan_workspace_folder(folder, &mut total_files_scanned);
                     let count = file_defs.len();
 
                     let mut idx = index.write().await;
@@ -500,4 +675,139 @@ impl LanguageServer for Backend {
         debug!("command executed!");
         Ok(None)
     }
+}
+
+fn build_builtin_signatures(
+    builtins: &[builtins::BuiltinFunction],
+    active_param: u32,
+) -> Vec<SignatureInformation> {
+    builtins
+        .iter()
+        .map(|b| {
+            let (label, offsets) = b.format_signature_with_offsets();
+            let parameters: Vec<ParameterInformation> = b
+                .params
+                .iter()
+                .zip(offsets.iter())
+                .map(|(p, off)| ParameterInformation {
+                    label: ParameterLabel::LabelOffsets(*off),
+                    documentation: p.documentation.as_ref().map(|d| {
+                        Documentation::MarkupContent(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: d.clone(),
+                        })
+                    }),
+                })
+                .collect();
+            SignatureInformation {
+                label,
+                documentation: b.documentation.as_ref().map(|d| {
+                    Documentation::MarkupContent(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: d.clone(),
+                    })
+                }),
+                parameters: Some(parameters),
+                active_parameter: Some(active_param),
+            }
+        })
+        .collect()
+}
+
+fn build_user_signatures(
+    def: &extract::FunctionDef,
+    active_param: u32,
+) -> Vec<SignatureInformation> {
+    let (label, offsets) = def.format_signature_with_offsets();
+    let parameters: Vec<ParameterInformation> = def
+        .params
+        .iter()
+        .zip(offsets.iter())
+        .map(|(p, off)| ParameterInformation {
+            label: ParameterLabel::LabelOffsets(*off),
+            documentation: p.documentation.as_ref().map(|d| {
+                Documentation::MarkupContent(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: d.clone(),
+                })
+            }),
+        })
+        .collect();
+    vec![SignatureInformation {
+        label,
+        documentation: def.documentation.as_ref().map(|d| {
+            Documentation::MarkupContent(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: d.clone(),
+            })
+        }),
+        parameters: Some(parameters),
+        active_parameter: Some(active_param),
+    }]
+}
+
+fn format_builtin_hover(builtins: &[builtins::BuiltinFunction]) -> String {
+    let mut parts = Vec::new();
+    for b in builtins {
+        let sig = b.format_signature();
+        let mut md = format!("```br\n{sig}\n```");
+        if let Some(doc) = &b.documentation {
+            md.push_str("\n\n---\n\n");
+            md.push_str(doc);
+        }
+        if !b.params.is_empty() {
+            let param_docs: Vec<String> = b
+                .params
+                .iter()
+                .filter(|p| p.documentation.is_some())
+                .map(|p| {
+                    format!(
+                        "*@param* `{}` \u{2014} {}",
+                        p.name,
+                        p.documentation.as_deref().unwrap()
+                    )
+                })
+                .collect();
+            if !param_docs.is_empty() {
+                md.push_str("\n\n");
+                md.push_str(&param_docs.join("\n\n"));
+            }
+        }
+        parts.push(md);
+    }
+    parts.join("\n\n---\n\n")
+}
+
+fn format_user_hover(def: &extract::FunctionDef) -> String {
+    let sig = def.format_signature();
+    let mut md = format!("```br\n{sig}\n```");
+
+    if let Some(doc) = &def.documentation {
+        md.push_str("\n\n---\n\n");
+        md.push_str(doc);
+    }
+
+    let param_docs: Vec<String> = def
+        .params
+        .iter()
+        .filter(|p| p.documentation.is_some())
+        .map(|p| {
+            format!(
+                "*@param* `{}` \u{2014} {}",
+                p.format_label(),
+                p.documentation.as_deref().unwrap()
+            )
+        })
+        .collect();
+    if !param_docs.is_empty() {
+        md.push_str("\n\n");
+        md.push_str(&param_docs.join("\n\n"));
+    }
+
+    if let Some(ret) = &def.return_documentation {
+        md.push_str("\n\n");
+        md.push_str(&format!("*@returns* \u{2014} {ret}"));
+    }
+
+    md
 }

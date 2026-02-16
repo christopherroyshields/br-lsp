@@ -10,6 +10,8 @@ pub struct FunctionDef {
     pub selection_range: Range,
     pub is_library: bool,
     pub params: Vec<ParamInfo>,
+    pub documentation: Option<String>,
+    pub return_documentation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +20,7 @@ pub struct ParamInfo {
     pub kind: ParamKind,
     pub is_optional: bool,
     pub is_reference: bool,
+    pub documentation: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +29,59 @@ pub enum ParamKind {
     String,
     NumericArray,
     StringArray,
+}
+
+impl FunctionDef {
+    pub fn format_signature(&self) -> String {
+        if self.params.is_empty() {
+            return self.name.clone();
+        }
+        let params: Vec<String> = self.params.iter().map(|p| p.format_label()).collect();
+        format!("{}({})", self.name, params.join(", "))
+    }
+
+    pub fn format_signature_with_offsets(&self) -> (String, Vec<[u32; 2]>) {
+        if self.params.is_empty() {
+            return (self.name.clone(), Vec::new());
+        }
+
+        let mut label = self.name.clone();
+        label.push('(');
+        let mut offsets = Vec::with_capacity(self.params.len());
+
+        for (i, param) in self.params.iter().enumerate() {
+            if i > 0 {
+                label.push_str(", ");
+            }
+            let start = label.len() as u32;
+            label.push_str(&param.format_label());
+            let end = label.len() as u32;
+            offsets.push([start, end]);
+        }
+        label.push(')');
+
+        (label, offsets)
+    }
+}
+
+impl ParamInfo {
+    pub fn format_label(&self) -> String {
+        let mut s = String::new();
+        if self.is_optional {
+            s.push('[');
+        }
+        if matches!(self.kind, ParamKind::NumericArray | ParamKind::StringArray) {
+            s.push_str("mat ");
+        }
+        if self.is_reference {
+            s.push('&');
+        }
+        s.push_str(&self.name);
+        if self.is_optional {
+            s.push(']');
+        }
+        s
+    }
 }
 
 pub fn extract_definitions(tree: &Tree, source: &str) -> Vec<FunctionDef> {
@@ -49,6 +105,82 @@ fn collect_def_statements(node: Node, source: &str, defs: &mut Vec<FunctionDef>)
     }
 }
 
+/// Find the doc_comment text for a def_statement node by looking at the
+/// immediately preceding sibling line.
+fn find_doc_comment<'a>(def_node: Node<'a>, source: &'a str) -> Option<&'a str> {
+    // def_statement is inside a line node
+    let line_node = def_node.parent()?;
+    if line_node.kind() != "line" {
+        return None;
+    }
+    // Get the previous sibling line
+    let prev_line = line_node.prev_sibling()?;
+    if prev_line.kind() != "line" {
+        return None;
+    }
+    // Look for a doc_comment child in that line
+    let mut cursor = prev_line.walk();
+    for child in prev_line.children(&mut cursor) {
+        if child.kind() == "doc_comment" {
+            return child.utf8_text(source.as_bytes()).ok();
+        }
+    }
+    None
+}
+
+struct DocComment {
+    description: Option<String>,
+    return_doc: Option<String>,
+    param_docs: Vec<(String, String)>, // (name, documentation)
+}
+
+fn parse_doc_comment(raw: &str) -> DocComment {
+    // Strip /** and */
+    let inner = raw.trim_start_matches("/**").trim_end_matches("*/").trim();
+
+    let mut description_lines = Vec::new();
+    let mut param_docs = Vec::new();
+    let mut return_doc = None;
+    let mut in_tags = false;
+
+    for line in inner.lines() {
+        // Strip leading whitespace and optional leading *
+        let trimmed = line.trim().trim_start_matches('*').trim();
+
+        if trimmed.starts_with("@param") {
+            in_tags = true;
+            let rest = trimmed.trim_start_matches("@param").trim();
+            // Format: @param name description
+            if let Some((name, doc)) = rest.split_once(char::is_whitespace) {
+                param_docs.push((name.trim().to_string(), doc.trim().to_string()));
+            } else if !rest.is_empty() {
+                param_docs.push((rest.to_string(), String::new()));
+            }
+        } else if trimmed.starts_with("@return") {
+            in_tags = true;
+            let rest = trimmed
+                .trim_start_matches("@returns")
+                .trim_start_matches("@return")
+                .trim();
+            return_doc = Some(rest.to_string());
+        } else if !in_tags && !trimmed.is_empty() {
+            description_lines.push(trimmed.to_string());
+        }
+    }
+
+    let description = if description_lines.is_empty() {
+        None
+    } else {
+        Some(description_lines.join(" "))
+    };
+
+    DocComment {
+        description,
+        return_doc,
+        param_docs,
+    }
+}
+
 fn extract_one_def(def_node: Node, source: &str) -> Option<FunctionDef> {
     let is_library = def_node
         .children(&mut def_node.walk())
@@ -69,11 +201,29 @@ fn extract_one_def(def_node: Node, source: &str) -> Option<FunctionDef> {
     let range = node_range(def_node);
 
     // Extract parameters
-    let params = func_def
+    let mut params = func_def
         .children(&mut func_def.walk())
         .find(|c| c.kind() == "parameter_list")
         .map(|pl| extract_params(pl, source))
         .unwrap_or_default();
+
+    // Parse doc comment if present
+    let (documentation, return_documentation) =
+        if let Some(raw) = find_doc_comment(def_node, source) {
+            let doc = parse_doc_comment(raw);
+            // Attach param docs to matching ParamInfo entries
+            for (pname, pdoc) in &doc.param_docs {
+                if let Some(param) = params
+                    .iter_mut()
+                    .find(|p| p.name.eq_ignore_ascii_case(pname))
+                {
+                    param.documentation = Some(pdoc.clone());
+                }
+            }
+            (doc.description, doc.return_doc)
+        } else {
+            (None, None)
+        };
 
     Some(FunctionDef {
         name,
@@ -81,6 +231,8 @@ fn extract_one_def(def_node: Node, source: &str) -> Option<FunctionDef> {
         selection_range,
         is_library,
         params,
+        documentation,
+        return_documentation,
     })
 }
 
@@ -128,6 +280,7 @@ fn extract_one_param(param_node: Node, is_optional: bool, source: &str) -> Optio
                     kind: ParamKind::Numeric,
                     is_optional,
                     is_reference,
+                    documentation: None,
                 });
             }
             "string_parameter" => {
@@ -137,6 +290,7 @@ fn extract_one_param(param_node: Node, is_optional: bool, source: &str) -> Optio
                     kind: ParamKind::String,
                     is_optional,
                     is_reference,
+                    documentation: None,
                 });
             }
             "string_array_parameter" | "stringarray" => {
@@ -146,6 +300,7 @@ fn extract_one_param(param_node: Node, is_optional: bool, source: &str) -> Optio
                     kind: ParamKind::StringArray,
                     is_optional,
                     is_reference,
+                    documentation: None,
                 });
             }
             "number_array_parameter" | "numberarray" => {
@@ -155,6 +310,7 @@ fn extract_one_param(param_node: Node, is_optional: bool, source: &str) -> Optio
                     kind: ParamKind::NumericArray,
                     is_optional,
                     is_reference,
+                    documentation: None,
                 });
             }
             _ => {}
@@ -273,5 +429,65 @@ fnend
     fn empty_source() {
         let defs = parse_and_extract("");
         assert!(defs.is_empty());
+    }
+
+    #[test]
+    fn doc_comment_parsed() {
+        let source = "\
+/** Adds two numbers
+  * @param A First number
+  * @param B Second number
+  * @returns The sum
+  */
+def fnAdd(A, B) = A + B
+";
+        let defs = parse_and_extract(source);
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].documentation.as_deref(), Some("Adds two numbers"));
+        assert_eq!(defs[0].return_documentation.as_deref(), Some("The sum"));
+        assert_eq!(
+            defs[0].params[0].documentation.as_deref(),
+            Some("First number")
+        );
+        assert_eq!(
+            defs[0].params[1].documentation.as_deref(),
+            Some("Second number")
+        );
+    }
+
+    #[test]
+    fn no_doc_comment() {
+        let defs = parse_and_extract("def fnPlain(X) = X\n");
+        assert_eq!(defs.len(), 1);
+        assert!(defs[0].documentation.is_none());
+        assert!(defs[0].return_documentation.is_none());
+    }
+
+    #[test]
+    fn format_signature_simple() {
+        let defs = parse_and_extract("def fnCalc(A, B) = A + B\n");
+        assert_eq!(defs[0].format_signature(), "fnCalc(A, B)");
+    }
+
+    #[test]
+    fn format_signature_modifiers() {
+        let defs = parse_and_extract("def fnTest(&A$, mat B; C)\nfnend\n");
+        assert_eq!(defs[0].format_signature(), "fnTest(&A$, mat B, [C])");
+    }
+
+    #[test]
+    fn format_signature_no_params() {
+        let defs = parse_and_extract("def fnConst = 42\n");
+        assert_eq!(defs[0].format_signature(), "fnConst");
+    }
+
+    #[test]
+    fn format_signature_offsets() {
+        let defs = parse_and_extract("def fnCalc(A, B) = A + B\n");
+        let (label, offsets) = defs[0].format_signature_with_offsets();
+        assert_eq!(label, "fnCalc(A, B)");
+        assert_eq!(offsets.len(), 2);
+        assert_eq!(&label[offsets[0][0] as usize..offsets[0][1] as usize], "A");
+        assert_eq!(&label[offsets[1][0] as usize..offsets[1][1] as usize], "B");
     }
 }
