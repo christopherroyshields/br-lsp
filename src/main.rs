@@ -1,5 +1,6 @@
 mod backend;
 mod builtins;
+mod diagnostics;
 mod extract;
 mod parser;
 mod references;

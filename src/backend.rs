@@ -12,6 +12,7 @@ use tree_sitter::{InputEdit, Point, Tree};
 use walkdir::WalkDir;
 
 use crate::builtins;
+use crate::diagnostics;
 use crate::extract;
 use crate::parser;
 use crate::references;
@@ -94,10 +95,14 @@ impl Backend {
         };
         let parse_elapsed = start.elapsed();
 
-        let diagnostics = tree
+        let mut diagnostics = tree
             .as_ref()
             .map(|t| parser::collect_diagnostics(t, &params.text))
             .unwrap_or_default();
+
+        if let Some(t) = tree.as_ref() {
+            diagnostics.extend(diagnostics::collect_function_diagnostics(t, &params.text));
+        }
 
         // Update workspace index with definitions from this file
         if let Some(t) = tree.as_ref() {
@@ -403,10 +408,14 @@ impl LanguageServer for Backend {
         };
         let parse_elapsed = start.elapsed() - edit_elapsed;
 
-        let diagnostics = tree
+        let mut diagnostics = tree
             .as_ref()
             .map(|t| parser::collect_diagnostics(t, &doc.source))
             .unwrap_or_default();
+
+        if let Some(t) = tree.as_ref() {
+            diagnostics.extend(diagnostics::collect_function_diagnostics(t, &doc.source));
+        }
 
         let defs = tree
             .as_ref()
