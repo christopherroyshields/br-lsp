@@ -1,0 +1,86 @@
+{
+  "name": "br-lsp",
+  "displayName": "BR Language Server",
+  "version": "0.1.0",
+  "description": "Language server for the Business Rules (BR) programming language",
+  "categories": [],
+  "keywords": [
+    "language-server",
+    "tower-lsp",
+    "business-rules",
+    "br"
+  ],
+  "license": "MIT",
+  "main": "./dist/extension.js",
+  "scripts": {
+    "postinstall": "cd client && pnpm i",
+    "compile": "npm run check-types && node esbuild.js --production",
+    "check-types": "tsc --noEmit",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "vsce package --no-dependencies",
+    "lint": "oxlint -c oxlint.json .",
+    "fmt": "oxfmt --write .",
+    "fmt:check": "oxfmt --check ."
+  },
+  "devDependencies": {
+    "@types/glob": "8.1.0",
+    "@types/mocha": "10.0.10",
+    "@types/node": "22.10.2",
+    "@vscode/vsce": "^3.2.1",
+    "cross-env": "^7.0.2",
+    "esbuild": "^0.24.2",
+    "glob": "11.0.0",
+    "mocha": "11.0.2",
+    "npm-run-all": "^4.1.5",
+    "oxfmt": "^0.24.0",
+    "oxlint": "^1.39.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "5.4.5",
+    "vscode-test": "^1.4.0",
+    "vscode-uri": "^3.0.2"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "br",
+        "aliases": ["Business Rules", "BR"],
+        "extensions": [
+          ".brs",
+          ".wbs"
+        ]
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "BR Language Server",
+      "properties": {
+        "br-lsp.trace.server": {
+          "type": "string",
+          "scope": "window",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "enumDescriptions": [
+            "No traces",
+            "Error only",
+            "Full log"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the BR language server."
+        }
+      }
+    }
+  },
+  "activationEvents": [
+    "onLanguage:br"
+  ],
+  "engines": {
+    "vscode": "^1.66.0"
+  },
+  "packageManager": "pnpm@8.15.7",
+  "enabledApiProposals": []
+}
