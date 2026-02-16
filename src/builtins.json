@@ -15,7 +15,7 @@
     "name": "CForm$",
     "documentation": "Compiles a form statement for faster use and a smaller size string.",
     "params": [
-      { "name": "<form>" }
+      { "name": "<form$>" }
     ]
   },
   {
@@ -29,7 +29,7 @@
     "name": "Cnvrt$",
     "documentation": "Converts a number to a string, by packing it into the specified Form spec.",
     "params": [
-      { "name": "<Spec>" },
+      { "name": "<Spec$>" },
       { "name": "<Number>" }
     ]
   },
@@ -37,7 +37,14 @@
     "name": "Date$",
     "documentation": "Returns the current date, or converts a specific Julian date to a string Date.",
     "params": [
-      { "name": "<days>" },
+      { "name": "[<days>]" },
+      { "name": "[<format$>]" }
+    ]
+  },
+  {
+    "name": "Date$",
+    "documentation": "Returns the current date formatted using the given format string.",
+    "params": [
       { "name": "[<format$>]" }
     ]
   },
@@ -45,15 +52,15 @@
     "name": "Decrypt$",
     "documentation": "Unencrypts data encrypted with the encrypt keyword. (doesn't work on MD5, which cannot be unencrypted.)",
     "params": [
-      { "name": "<string>" },
-      { "name": "[<Algorithm>]" }
+      { "name": "<string$>" },
+      { "name": "[<Algorithm$>]" }
     ]
   },
   {
     "name": "Decrypt$",
     "documentation": "Unencrypts data encrypted with the encrypt keyword. (doesn't work on MD5, which cannot be unencrypted.)",
     "params": [
-      { "name": "<string>" },
+      { "name": "<string$>" },
       { "name": "\"MD5\"" }
     ]
   },
@@ -61,22 +68,23 @@
     "name": "Encrypt$",
     "documentation": "Encrypts a string using one of a few common algorithms including MD5.",
     "params": [
-      { "name": "<string>" },
-      { "name": "[<Algorithm>]" }
+      { "name": "<string$>" },
+      { "name": "[<Algorithm$>]" }
     ]
   },
   {
     "name": "Env$",
     "documentation": "Returns the contents of an Environment Variable.",
     "params": [
-      { "name": "<VariableName>" }
+      { "name": "<VariableName$>" }
     ]
   },
   {
     "name": "File$",
-    "documentation": "Returns the file name of the file specified.",
+    "documentation": "Returns the file name of the file specified. With no arguments, returns the filename from the last I/O error.",
     "params": [
-      { "name": "<Number>" }
+      { "name": "[<Number>]" },
+      { "name": "[<\"HTTPINFO\">]" }
     ]
   },
   {
@@ -84,14 +92,14 @@
     "documentation": "Displays the requested Help Topic from the HelpFile specified by the HELPDFLT config specification.",
     "params": [
       { "name": "\"<topic>,[<filename>]\"", "documentation": "Name of the help topic to be displayed and optional help filename." },
-      { "name": "<mark>", "documentation": "Optional number that indicates which part of the topic text to display first. It correlates to a caret (^) character in the text." }
+      { "name": "[<mark>]", "documentation": "Optional number that indicates which part of the topic text to display first. It correlates to a caret (^) character in the text." }
     ]
   },
   {
     "name": "Hex$",
     "documentation": "Converts the given string to Hexadecimal.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
@@ -105,63 +113,66 @@
     "name": "Login_Name$",
     "documentation": "Returns the Windows User Name of the person logged in.",
     "params": [
-      { "name": "[<UserName>]", "documentation": "The optional parameter can be used to Override Login_Name with another name." }
+      { "name": "[<UserName$>]", "documentation": "The optional parameter can be used to Override Login_Name with another name." }
     ]
   },
   {
     "name": "LPad$",
     "documentation": "Pads a string on the left with spaces (or optionally, any other character).",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" },
+      { "name": "<length>" },
+      { "name": "[<character$>]" }
     ]
   },
   {
     "name": "LTrm$",
     "documentation": "Trims off any spaces (or optionally any other specific character) from the left of the given string.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" },
+      { "name": "[<char$>]" }
     ]
   },
   {
     "name": "Lwrc$",
     "documentation": "Converts the given string to Lowercase.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
     "name": "Max$",
     "documentation": "Finds the String with the greatest ASCII value of the given strings.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
     "name": "Min$",
     "documentation": "Finds the String with the lowest ASCII value of the given strings.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
     "name": "Msg$",
     "documentation": "Displays custom text in the Status Line at the bottom of the BR Command Console window.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
     "name": "OS_FileName$",
     "documentation": "Returns the OS file name of the Specified BR Filename, taking into account the Drive statements.",
     "params": [
-      { "name": "<BR_FileName>" }
+      { "name": "<BR_FileName$>" }
     ]
   },
   {
     "name": "Pic$",
     "documentation": "Sets or displays the Currency Symbol used by the PIC form statement.",
     "params": [
-      { "name": "<CurrencySymbol>" }
+      { "name": "<CurrencySymbol$>" }
     ]
   },
   {
@@ -182,7 +193,7 @@
     "name": "Rpt$",
     "documentation": "Repeat the given character or string the specified number of times.",
     "params": [
-      { "name": "<string>" },
+      { "name": "<string$>" },
       { "name": "<repeat>" }
     ]
   },
@@ -190,7 +201,8 @@
     "name": "RTrm$",
     "documentation": "Trims off any spaces (or optionally any other specific character) from the right of the given string.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" },
+      { "name": "[<char$>]" }
     ]
   },
   {
@@ -200,9 +212,19 @@
   },
   {
     "name": "SRep$",
-    "documentation": "Search the given string and replace all occurrences of the first string with the second string.",
+    "documentation": "Search the given string and replace all occurrences of the search string with the replacement string.",
     "params": [
       { "name": "<String$>" },
+      { "name": "<SearchFor$>" },
+      { "name": "<ReplaceWith$>" }
+    ]
+  },
+  {
+    "name": "SRep$",
+    "documentation": "Search the given string and replace all occurrences of the search string with the replacement string, starting at the given position.",
+    "params": [
+      { "name": "<String$>" },
+      { "name": "<StartPosition>" },
       { "name": "<SearchFor$>" },
       { "name": "<ReplaceWith$>" }
     ]
@@ -218,28 +240,29 @@
     "name": "Time$",
     "documentation": "Returns the current System Time.",
     "params": [
-      { "name": "Time$" }
+      { "name": "[Time$]" }
     ]
   },
   {
     "name": "Trim$",
     "documentation": "Trims all spaces off both ends of the given string.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" },
+      { "name": "[<char$>]" }
     ]
   },
   {
     "name": "UnHex$",
     "documentation": "Converts Hexadecimal to Characters.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
     "name": "UprC$",
     "documentation": "Converts the given string to Uppercase.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
@@ -271,8 +294,8 @@
     "name": "Xlate$",
     "documentation": "Returns a string translated using a second string as a translation table.",
     "params": [
-      { "name": "<string>" },
-      { "name": "<translation string>" },
+      { "name": "<string$>" },
+      { "name": "<translation string$>" },
       { "name": "[<position>]" }
     ]
   },
@@ -311,8 +334,10 @@
   },
   {
     "name": "CmdKey",
-    "documentation": "Returns a value to identify the last command key (function key) used to terminate keyboard input, or returns 0 if <ENTER> was the last key pressed.",
-    "params": []
+    "documentation": "Returns a value to identify the last command key (function key) used to terminate keyboard input, or returns 0 if <ENTER> was the last key pressed. CmdKey(<value>) sets the command key value.",
+    "params": [
+      { "name": "[<value>]" }
+    ]
   },
   {
     "name": "Cnt",
@@ -338,8 +363,19 @@
   },
   {
     "name": "CurFld",
-    "documentation": "Returns the number of the field containing the cursor from the last INPUT FIELDS.",
-    "params": []
+    "documentation": "Returns the number of the field containing the cursor from the last INPUT FIELDS. CURFLD(window, field) sets focus to the specified field.",
+    "params": [
+      { "name": "[<window>]" },
+      { "name": "[<field>]" }
+    ]
+  },
+  {
+    "name": "CurFld",
+    "documentation": "Returns a field attribute. CURFLD(<field>, <attribute$>) returns the specified attribute of the given field.",
+    "params": [
+      { "name": "[<field>]" },
+      { "name": "[<attribute$>]" }
+    ]
   },
   {
     "name": "CurRow",
@@ -348,8 +384,11 @@
   },
   {
     "name": "CurTab",
-    "documentation": "Returns the active tabbed window number.",
-    "params": []
+    "documentation": "Returns the active tabbed window number. CURTAB(nn) returns the last tab clicked within the tab group containing window nn. CURTAB(nn,1) raises tab nn.",
+    "params": [
+      { "name": "[<window>]" },
+      { "name": "[<raise>]" }
+    ]
   },
   {
     "name": "CurWindow",
@@ -365,6 +404,13 @@
     ]
   },
   {
+    "name": "Date",
+    "documentation": "Returns the current date formatted according to the given format string (e.g. \"m\", \"cy\", \"MDY\").",
+    "params": [
+      { "name": "[*<format$>]" }
+    ]
+  },
+  {
     "name": "Days",
     "documentation": "Returns the absolute, sequential value which is assigned to dates after January 1, 1900.",
     "params": [
@@ -377,7 +423,7 @@
     "documentation": "Depending on loglevel (message-level must be equal or lower), send data to the logfile as well as to the debugger if it is attached, or optionally to the command console if the debugger is not attached and GUI is ON.",
     "params": [
       { "name": "<message-level>" },
-      { "name": "<string-value>" }
+      { "name": "<string-value$>" }
     ]
   },
   {
@@ -396,7 +442,7 @@
     "name": "Exists",
     "documentation": "Returns a nonzero value if the specified file (PROC or program) exists and the user has read privileges. If one or both of these conditions is false, exists returns a value of zero.",
     "params": [
-      { "name": "<filename>" }
+      { "name": "<filename$>" }
     ]
   },
   {
@@ -410,7 +456,18 @@
     "name": "File",
     "documentation": "Returns the numeric value that specifies the status of file associated with the File Handle.\n-1: File not opened.\n0: Operation performed successfully.\n10: End of file occurred during input.\n11: End of file occurred during output.\n20: Transmission error during input.\n21: Transmission error during output.",
     "params": [
-      { "name": "<file handle>" }
+      { "name": "<file handle>" },
+      { "name": "[<key$>]" },
+      { "name": "[<record_number>]" }
+    ]
+  },
+  {
+    "name": "File",
+    "documentation": "Returns window dimensions or font size into a numeric array when used with WINDOW_RECT, USABLE_RECT, or FONTSIZE.",
+    "params": [
+      { "name": "<window>" },
+      { "name": "<rect_type$>" },
+      { "name": "MAT <numeric array>" }
     ]
   },
   {
@@ -436,7 +493,7 @@
     "name": "Freesp",
     "documentation": "Returns the number of free (unused) bytes on the drive containing file N.",
     "params": [
-      { "name": "<file name>" }
+      { "name": "<file name$>" }
     ]
   },
   {
@@ -485,7 +542,7 @@
     "name": "Len",
     "documentation": "Returns the number of characters in the given string.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
@@ -526,7 +583,7 @@
     "documentation": "Converts an array to a string.",
     "params": [
       { "name": "MAT <Array Name>" },
-      { "name": "<String Variable>" },
+      { "name": "<String Variable$>" },
       { "name": "[<Delimiter$>]" },
       { "name": "[<Quote-Type>] [:] [<trim>]" }
     ]
@@ -562,7 +619,7 @@
     "documentation": "The MSG internal function (without the dollar sign) is only available for Windows & CS versions. This should not be confused with Msg$.",
     "params": [
       { "name": "\"KB\"" },
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
@@ -584,7 +641,7 @@
     "name": "Ord",
     "documentation": "Returns the ASCII ordinate value (from 0 to 255) of the first character in the string$.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
@@ -596,8 +653,8 @@
     "name": "Pos",
     "documentation": "Returns the position of the first character of a substring in str1$ that matches str2$.",
     "params": [
-      { "name": "<string>" },
-      { "name": "[^]<string>" },
+      { "name": "<string$>" },
+      { "name": "[^]<string$>" },
       { "name": "[[-]<start>]" }
     ]
   },
@@ -605,7 +662,7 @@
     "name": "Printer_List",
     "documentation": "Reads the list of available Windows printers into the provided array (mat a$). Returns the number of available printers.",
     "params": [
-      { "name": "<Mat array name>" }
+      { "name": "<Mat array name$>" }
     ]
   },
   {
@@ -660,8 +717,8 @@
     "name": "SetEnv",
     "documentation": "Sets session based environmental variables in Business Rules!.",
     "params": [
-      { "name": "<field>" },
-      { "name": "<value>" }
+      { "name": "<field$>" },
+      { "name": "<value$>" }
     ]
   },
   {
@@ -696,8 +753,8 @@
     "name": "Srch",
     "documentation": "Searches an array and returns the row number matching the argument. If the argument is not found, then either 0 (BR 4.1 and below) or -1 (BR 4.2 and above).",
     "params": [
-      { "name": "mat array$" },
-      { "name": "[^]<argument$>" },
+      { "name": "mat <array>" },
+      { "name": "[^]<argument>" },
       { "name": "[<row>]" }
     ]
   },
@@ -705,8 +762,8 @@
     "name": "Str2Mat",
     "documentation": "Splits a string variable based on a delimiter and places the resulting strings into an array which STR2MAT dynamically re-dimensions.",
     "params": [
-      { "name": "<string variable>" },
-      { "name": "MAT <array name>" },
+      { "name": "<string variable$>" },
+      { "name": "MAT <array name$>" },
       { "name": "[<delimiter$>|MAT <delimiter$>]" },
       { "name": "[<quote-type:trim>]" }
     ]
@@ -749,14 +806,15 @@
     "name": "Val",
     "documentation": "Returns the string expressed as a numeric value rather than a string.",
     "params": [
-      { "name": "<string>" }
+      { "name": "<string$>" }
     ]
   },
   {
     "name": "Version",
     "documentation": "Returns the version of an open internal data file. It can also be used to set the version.",
     "params": [
-      { "name": "<file_handle>" }
+      { "name": "<file_handle>" },
+      { "name": "[<version>]" }
     ]
   }
 ]

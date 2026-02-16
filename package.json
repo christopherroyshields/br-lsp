@@ -52,6 +52,18 @@
         ]
       }
     ],
+    "commands": [
+      {
+        "command": "br-lsp.scanAll",
+        "title": "BR: Scan All Project Source"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "br-lsp.scanAll",
+        "key": "ctrl+alt+7"
+      }
+    ],
     "configuration": {
       "type": "object",
       "title": "BR Language Server",

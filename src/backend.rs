@@ -12,6 +12,7 @@ use tree_sitter::{InputEdit, Point, Tree};
 use walkdir::WalkDir;
 
 use crate::builtins;
+use crate::check;
 use crate::diagnostics;
 use crate::extract;
 use crate::parser;
@@ -182,6 +183,46 @@ impl Backend {
 
                 let uri = Url::from_file_path(file_path).ok()?;
                 Some((uri, defs))
+            })
+            .collect()
+    }
+
+    fn scan_workspace_diagnostics(folder: &Url) -> Vec<(Url, Vec<Diagnostic>)> {
+        let path = match folder.to_file_path() {
+            Ok(p) => p,
+            Err(()) => {
+                warn!("Cannot convert workspace folder URI to path: {folder}");
+                return Vec::new();
+            }
+        };
+
+        let file_paths: Vec<_> = WalkDir::new(&path)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file() && workspace::is_br_file(e.path()))
+            .map(|e| e.into_path())
+            .collect();
+
+        file_paths
+            .par_iter()
+            .filter_map(|file_path| {
+                let source = match workspace::read_br_file(file_path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Failed to read {}: {e}", file_path.display());
+                        return None;
+                    }
+                };
+
+                let mut ts_parser = parser::new_parser();
+                let tree = parser::parse(&mut ts_parser, &source, None)?;
+
+                let mut diags = parser::collect_diagnostics(&tree, &source);
+                diags.extend(diagnostics::collect_function_diagnostics(&tree, &source));
+
+                let uri = Url::from_file_path(file_path).ok()?;
+                Some((uri, diags))
             })
             .collect()
     }
@@ -821,8 +862,39 @@ impl LanguageServer for Backend {
         }
     }
 
-    async fn execute_command(&self, _: ExecuteCommandParams) -> Result<Option<Value>> {
-        debug!("command executed!");
+    async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
+        debug!("command executed: {}", params.command);
+
+        if params.command == "br-lsp.scanAll" {
+            let folders = self.workspace_folders.read().await.clone();
+
+            let results = tokio::task::spawn_blocking(move || {
+                let mut all_results: Vec<(Url, Vec<Diagnostic>)> = Vec::new();
+                for folder in &folders {
+                    all_results.extend(Self::scan_workspace_diagnostics(folder));
+                }
+                all_results
+            })
+            .await
+            .unwrap_or_default();
+
+            for (uri, diags) in &results {
+                self.client
+                    .publish_diagnostics(uri.clone(), diags.clone(), None)
+                    .await;
+            }
+
+            let total_files = results.len();
+            let files_with_errors = results.iter().filter(|(_, d)| !d.is_empty()).count();
+            let summary = format!("Scanned {total_files} files, {files_with_errors} with errors");
+            let csv = check::diagnostics_to_csv(&results);
+
+            return Ok(Some(serde_json::json!({
+                "summary": summary,
+                "csv": csv,
+            })));
+        }
+
         Ok(None)
     }
 }

@@ -3,6 +3,8 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
+use crate::extract::ParamKind;
+
 #[derive(Debug, Deserialize)]
 pub struct BuiltinFunction {
     pub name: String,
@@ -14,6 +16,53 @@ pub struct BuiltinFunction {
 pub struct BuiltinParam {
     pub name: String,
     pub documentation: Option<String>,
+}
+
+impl BuiltinParam {
+    /// Infer the expected parameter type from naming conventions:
+    /// - `$` suffix → string
+    /// - `MAT` prefix → array
+    /// - Literal string params (e.g. `"MD5"`) → None (skip type checking)
+    /// - Ambiguous params (e.g. arrays without type indicator) → None
+    pub fn kind(&self) -> Option<ParamKind> {
+        // Skip literal string params ("MD5", "KB")
+        if self.name.starts_with('"') {
+            return None;
+        }
+        // Strip wrapper chars for analysis
+        let stripped = self.name.replace(['[', ']', '<', '>', '*', '^'], "");
+        let stripped = stripped.trim();
+        let is_mat = stripped.starts_with("MAT ") || stripped.starts_with("mat ");
+        let is_string = stripped.ends_with('$');
+
+        if is_mat {
+            if is_string {
+                return Some(ParamKind::StringArray);
+            }
+            // MAT without $ — only NumericArray if explicitly "numeric" in name
+            let inner = stripped
+                .trim_start_matches("MAT ")
+                .trim_start_matches("mat ")
+                .trim();
+            if inner.to_ascii_lowercase().contains("numeric") {
+                return Some(ParamKind::NumericArray);
+            }
+            // Ambiguous array (could be numeric or string)
+            return None;
+        }
+
+        if is_string {
+            return Some(ParamKind::String);
+        }
+
+        // Non-MAT, non-$ — check for known ambiguous patterns
+        let lower = stripped.to_ascii_lowercase();
+        if lower.contains("array") || lower == "date" || lower == "argument" {
+            return None;
+        }
+
+        Some(ParamKind::Numeric)
+    }
 }
 
 static BUILTINS: LazyLock<HashMap<String, Vec<BuiltinFunction>>> = LazyLock::new(|| {
@@ -115,11 +164,11 @@ mod tests {
     fn format_signature_offsets() {
         let results = lookup("Cnvrt$");
         let (label, offsets) = results[0].format_signature_with_offsets();
-        assert_eq!(label, "Cnvrt$(<Spec>, <Number>)");
+        assert_eq!(label, "Cnvrt$(<Spec$>, <Number>)");
         assert_eq!(offsets.len(), 2);
         // Verify offsets point to the right substrings
         let spec = &label[offsets[0][0] as usize..offsets[0][1] as usize];
-        assert_eq!(spec, "<Spec>");
+        assert_eq!(spec, "<Spec$>");
         let num = &label[offsets[1][0] as usize..offsets[1][1] as usize];
         assert_eq!(num, "<Number>");
     }

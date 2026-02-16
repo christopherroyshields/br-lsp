@@ -10,6 +10,7 @@ pub struct FunctionDef {
     pub selection_range: Range,
     pub is_library: bool,
     pub params: Vec<ParamInfo>,
+    pub has_param_substitution: bool,
     pub documentation: Option<String>,
     pub return_documentation: Option<String>,
 }
@@ -201,11 +202,13 @@ fn extract_one_def(def_node: Node, source: &str) -> Option<FunctionDef> {
     let range = node_range(def_node);
 
     // Extract parameters
-    let mut params = func_def
+    let param_list_node = func_def
         .children(&mut func_def.walk())
-        .find(|c| c.kind() == "parameter_list")
+        .find(|c| c.kind() == "parameter_list");
+    let mut params = param_list_node
         .map(|pl| extract_params(pl, source))
         .unwrap_or_default();
+    let has_param_substitution = param_list_node.is_some_and(|pl| has_substitution(pl));
 
     // Parse doc comment if present
     let (documentation, return_documentation) =
@@ -231,9 +234,31 @@ fn extract_one_def(def_node: Node, source: &str) -> Option<FunctionDef> {
         selection_range,
         is_library,
         params,
+        has_param_substitution,
         documentation,
         return_documentation,
     })
+}
+
+/// Check if a parameter_list contains any param_substitution nodes (e.g. `[[Name]]`).
+fn has_substitution(param_list: Node) -> bool {
+    let mut cursor = param_list.walk();
+    for child in param_list.children(&mut cursor) {
+        if child.kind() == "required_parameter" || child.kind() == "optional_parameter" {
+            let mut inner = child.walk();
+            for grandchild in child.children(&mut inner) {
+                if grandchild.kind() == "parameter" {
+                    let mut param_cursor = grandchild.walk();
+                    for param_child in grandchild.named_children(&mut param_cursor) {
+                        if param_child.kind() == "param_substitution" {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 fn extract_params(param_list: Node, source: &str) -> Vec<ParamInfo> {

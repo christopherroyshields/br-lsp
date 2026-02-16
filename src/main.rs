@@ -1,5 +1,6 @@
 mod backend;
 mod builtins;
+mod check;
 mod diagnostics;
 mod extract;
 mod parser;
@@ -14,8 +15,38 @@ use tokio::sync::RwLock;
 use tower_lsp::{LspService, Server};
 use workspace::WorkspaceIndex;
 
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    match args.get(1).map(|s| s.as_str()) {
+        Some("check") => {
+            let code = check::run_check(&args[2..]);
+            std::process::exit(code);
+        }
+        Some("--help" | "-h") => {
+            print_usage();
+        }
+        Some("--version" | "-V") => {
+            println!("br-lsp {}", env!("CARGO_PKG_VERSION"));
+        }
+        _ => {
+            run_lsp();
+        }
+    }
+}
+
+fn print_usage() {
+    println!("br-lsp {}", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("Usage:");
+    println!("  br-lsp                         Start LSP server (stdin/stdout)");
+    println!("  br-lsp check <files-or-dirs>   Check BR files and output diagnostics as CSV");
+    println!("  br-lsp --help                  Show this help");
+    println!("  br-lsp --version               Show version");
+}
+
 #[tokio::main]
-async fn main() {
+async fn run_lsp() {
     env_logger::init();
 
     let stdin = tokio::io::stdin();

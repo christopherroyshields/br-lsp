@@ -141,6 +141,7 @@ mod tests {
             },
             is_library,
             params: vec![],
+            has_param_substitution: false,
             documentation: None,
             return_documentation: None,
         }
@@ -282,6 +283,7 @@ mod tests {
                     documentation: None,
                 },
             ],
+            has_param_substitution: false,
             documentation: None,
             return_documentation: None,
         };
