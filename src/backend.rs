@@ -8,6 +8,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{notification, request, *};
 use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Tree;
+use rayon::prelude::*;
 use walkdir::WalkDir;
 
 use crate::extract;
@@ -74,7 +75,6 @@ impl Backend {
 
     fn scan_workspace_folder(
         folder: &Url,
-        parser: &mut tree_sitter::Parser,
         files_scanned: &mut usize,
     ) -> Vec<(Url, Vec<extract::FunctionDef>)> {
         let path = match folder.to_file_path() {
@@ -85,46 +85,40 @@ impl Backend {
             }
         };
 
-        let mut results = Vec::new();
-        for entry in WalkDir::new(&path)
+        // Collect file paths first (walkdir is single-threaded)
+        let file_paths: Vec<_> = WalkDir::new(&path)
             .follow_links(true)
             .into_iter()
             .filter_map(|e| e.ok())
-        {
-            let file_path = entry.path();
-            if !entry.file_type().is_file() || !workspace::is_br_file(file_path) {
-                continue;
-            }
+            .filter(|e| e.file_type().is_file() && workspace::is_br_file(e.path()))
+            .map(|e| e.into_path())
+            .collect();
 
-            *files_scanned += 1;
+        *files_scanned += file_paths.len();
 
-            let source = match workspace::read_br_file(file_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("Failed to read {}: {e}", file_path.display());
-                    continue;
+        // Parse in parallel — each thread gets its own parser
+        file_paths
+            .par_iter()
+            .filter_map(|file_path| {
+                let source = match workspace::read_br_file(file_path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Failed to read {}: {e}", file_path.display());
+                        return None;
+                    }
+                };
+
+                let mut parser = parser::new_parser();
+                let tree = parser::parse(&mut parser, &source, None)?;
+                let defs = extract::extract_definitions(&tree, &source);
+                if defs.is_empty() {
+                    return None;
                 }
-            };
 
-            let tree = match parser::parse(parser, &source, None) {
-                Some(t) => t,
-                None => continue,
-            };
-
-            let defs = extract::extract_definitions(&tree, &source);
-            if defs.is_empty() {
-                continue;
-            }
-
-            let uri = match Url::from_file_path(file_path) {
-                Ok(u) => u,
-                Err(()) => continue,
-            };
-
-            results.push((uri, defs));
-        }
-
-        results
+                let uri = Url::from_file_path(file_path).ok()?;
+                Some((uri, defs))
+            })
+            .collect()
     }
 }
 
@@ -237,13 +231,12 @@ impl LanguageServer for Backend {
                 .await;
 
             let start = std::time::Instant::now();
-            let mut parser = parser::new_parser();
             let mut total = 0usize;
             let mut total_files_scanned = 0usize;
 
             for folder in &folders {
                 let file_defs =
-                    Self::scan_workspace_folder(folder, &mut parser, &mut total_files_scanned);
+                    Self::scan_workspace_folder(folder, &mut total_files_scanned);
                 let count = file_defs.len();
 
                 let mut idx = index.write().await;
@@ -394,14 +387,12 @@ impl LanguageServer for Backend {
 
             tokio::spawn(async move {
                 let start = std::time::Instant::now();
-                let mut parser = parser::new_parser();
                 let mut total = 0usize;
                 let mut total_files_scanned = 0usize;
 
                 for folder in &new_folders {
                     let file_defs = Self::scan_workspace_folder(
                         folder,
-                        &mut parser,
                         &mut total_files_scanned,
                     );
                     let count = file_defs.len();

@@ -18,3 +18,4 @@ tree-sitter = "0.25"
 tree-sitter-br = { path = "../tree-sitter-br" }
 walkdir = "2"
 encoding_rs = "0.8"
+rayon = "1"
