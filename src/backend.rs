@@ -8,7 +8,7 @@ use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{notification, request, *};
 use tower_lsp::{Client, LanguageServer};
-use tree_sitter::Tree;
+use tree_sitter::{InputEdit, Point, Tree};
 use walkdir::WalkDir;
 
 use crate::builtins;
@@ -18,7 +18,6 @@ use crate::references;
 use crate::workspace::{self, WorkspaceIndex};
 
 pub struct DocumentState {
-    #[allow(dead_code)]
     pub rope: Rope,
     pub source: String,
     pub tree: Option<Tree>,
@@ -37,14 +36,63 @@ struct TextDocumentItem {
     text: String,
 }
 
+/// Apply one incremental LSP change to the rope and source string, returning
+/// the corresponding tree-sitter `InputEdit`. BR source is ASCII so byte
+/// offsets equal char offsets — no UTF-16 conversion needed.
+fn apply_change(rope: &mut Rope, source: &mut String, range: &Range, new_text: &str) -> InputEdit {
+    let start_line = range.start.line as usize;
+    let start_col = range.start.character as usize;
+    let end_line = range.end.line as usize;
+    let end_col = range.end.character as usize;
+
+    let start_char = rope.line_to_char(start_line) + start_col;
+    let end_char = rope.line_to_char(end_line) + end_col;
+
+    let start_byte = start_char; // ASCII: 1 byte per char
+    let old_end_byte = end_char;
+
+    let new_end_byte = start_byte + new_text.len();
+
+    // Compute new_end_position by scanning new_text for newlines
+    let new_end_position = {
+        let mut line = start_line;
+        let mut col = start_col;
+        for ch in new_text.chars() {
+            if ch == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        Point::new(line, col)
+    };
+
+    // Mutate rope and source
+    rope.remove(start_char..end_char);
+    rope.insert(start_char, new_text);
+    source.replace_range(start_byte..old_end_byte, new_text);
+
+    InputEdit {
+        start_byte,
+        old_end_byte,
+        new_end_byte,
+        start_position: Point::new(start_line, start_col),
+        old_end_position: Point::new(end_line, end_col),
+        new_end_position,
+    }
+}
+
 impl Backend {
     async fn on_change(&self, params: TextDocumentItem) {
+        let start = std::time::Instant::now();
         let rope = Rope::from_str(&params.text);
 
         let tree = {
             let mut parser = self.parser.lock().unwrap();
             parser::parse(&mut parser, &params.text, None)
         };
+        let parse_elapsed = start.elapsed();
 
         let diagnostics = tree
             .as_ref()
@@ -68,8 +116,20 @@ impl Backend {
             },
         );
 
+        let total_elapsed = start.elapsed();
+
         self.client
             .publish_diagnostics(params.uri, diagnostics, None)
+            .await;
+
+        self.client
+            .log_message(
+                MessageType::LOG,
+                format!(
+                    "on_change (full parse): {} bytes, parse {parse_elapsed:.1?}, total {total_elapsed:.1?}",
+                    params.text.len()
+                ),
+            )
             .await;
     }
 
@@ -145,7 +205,7 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
                         open_close: Some(true),
-                        change: Some(TextDocumentSyncKind::FULL),
+                        change: Some(TextDocumentSyncKind::INCREMENTAL),
                         save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
                             include_text: Some(true),
                         })),
@@ -292,11 +352,92 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        self.on_change(TextDocumentItem {
-            uri: params.text_document.uri,
-            text: params.content_changes[0].text.clone(),
-        })
-        .await;
+        let start = std::time::Instant::now();
+        let uri = params.text_document.uri;
+        let uri_string = uri.to_string();
+        let change_count = params.content_changes.len();
+
+        let Some(mut doc) = self.document_map.get_mut(&uri_string) else {
+            // Document not in map — fall back to full parse
+            if let Some(change) = params.content_changes.into_iter().last() {
+                self.on_change(TextDocumentItem {
+                    uri,
+                    text: change.text,
+                })
+                .await;
+            }
+            return;
+        };
+
+        // Apply each incremental change
+        let DocumentState {
+            ref mut rope,
+            ref mut source,
+            ref mut tree,
+        } = *doc;
+
+        let had_old_tree = tree.is_some();
+        for change in params.content_changes {
+            match change.range {
+                Some(range) => {
+                    let edit = apply_change(rope, source, &range, &change.text);
+                    if let Some(t) = tree.as_mut() {
+                        t.edit(&edit);
+                    }
+                }
+                None => {
+                    // Full replacement — reset everything
+                    *rope = Rope::from_str(&change.text);
+                    *source = change.text;
+                    *tree = None;
+                }
+            }
+        }
+        let edit_elapsed = start.elapsed();
+
+        // Reparse (incremental if we have an old tree)
+        let incremental = doc.tree.is_some();
+        let tree = {
+            let mut parser = self.parser.lock().unwrap();
+            parser::parse(&mut parser, &doc.source, doc.tree.as_ref())
+        };
+        let parse_elapsed = start.elapsed() - edit_elapsed;
+
+        let diagnostics = tree
+            .as_ref()
+            .map(|t| parser::collect_diagnostics(t, &doc.source))
+            .unwrap_or_default();
+
+        let defs = tree
+            .as_ref()
+            .map(|t| extract::extract_definitions(t, &doc.source));
+
+        let source_len = doc.source.len();
+        doc.tree = tree;
+
+        // Drop the DashMap RefMut before awaiting (it's not Send)
+        drop(doc);
+
+        if let Some(defs) = defs {
+            let mut index = self.workspace_index.write().await;
+            index.update_file(&uri, defs);
+        }
+
+        let total_elapsed = start.elapsed();
+
+        self.client
+            .publish_diagnostics(uri, diagnostics, None)
+            .await;
+
+        let mode = if incremental { "incremental" } else if had_old_tree { "full (tree reset)" } else { "full (no prior tree)" };
+        self.client
+            .log_message(
+                MessageType::LOG,
+                format!(
+                    "did_change ({mode}): {source_len} bytes, {change_count} change(s), edit {edit_elapsed:.1?}, parse {parse_elapsed:.1?}, total {total_elapsed:.1?}"
+                ),
+            )
+            .await;
     }
 
     async fn did_save(&self, _params: DidSaveTextDocumentParams) {
@@ -810,4 +951,102 @@ fn format_user_hover(def: &extract::FunctionDef) -> String {
     }
 
     md
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_change_single_char_replacement() {
+        let original = "let x = 1\n";
+        let mut rope = Rope::from_str(original);
+        let mut source = original.to_string();
+
+        // Replace '1' (at line 0, col 8) with '2'
+        let range = Range {
+            start: Position {
+                line: 0,
+                character: 8,
+            },
+            end: Position {
+                line: 0,
+                character: 9,
+            },
+        };
+        let edit = apply_change(&mut rope, &mut source, &range, "2");
+
+        assert_eq!(source, "let x = 2\n");
+        assert_eq!(rope.to_string(), "let x = 2\n");
+
+        assert_eq!(edit.start_byte, 8);
+        assert_eq!(edit.old_end_byte, 9);
+        assert_eq!(edit.new_end_byte, 9);
+        assert_eq!(edit.start_position, Point::new(0, 8));
+        assert_eq!(edit.old_end_position, Point::new(0, 9));
+        assert_eq!(edit.new_end_position, Point::new(0, 9));
+    }
+
+    #[test]
+    fn apply_change_insert_newline() {
+        let original = "let x = 1\n";
+        let mut rope = Rope::from_str(original);
+        let mut source = original.to_string();
+
+        // Insert a newline after '1' (before the existing '\n')
+        let range = Range {
+            start: Position {
+                line: 0,
+                character: 9,
+            },
+            end: Position {
+                line: 0,
+                character: 9,
+            },
+        };
+        let edit = apply_change(&mut rope, &mut source, &range, "\nlet y = 2");
+
+        assert_eq!(source, "let x = 1\nlet y = 2\n");
+        assert_eq!(rope.to_string(), "let x = 1\nlet y = 2\n");
+
+        assert_eq!(edit.start_byte, 9);
+        assert_eq!(edit.old_end_byte, 9); // pure insert
+        assert_eq!(edit.new_end_byte, 19);
+        assert_eq!(edit.new_end_position, Point::new(1, 9));
+    }
+
+    #[test]
+    fn incremental_parse_matches_full_parse() {
+        let original = "let x = 1\n";
+        let mut parser = parser::new_parser();
+        let tree = parser::parse(&mut parser, original, None).unwrap();
+
+        // Apply an edit: replace '1' with '42'
+        let mut rope = Rope::from_str(original);
+        let mut source = original.to_string();
+        let range = Range {
+            start: Position {
+                line: 0,
+                character: 8,
+            },
+            end: Position {
+                line: 0,
+                character: 9,
+            },
+        };
+        let edit = apply_change(&mut rope, &mut source, &range, "42");
+
+        // Incremental reparse
+        let mut edited_tree = tree;
+        edited_tree.edit(&edit);
+        let incremental = parser::parse(&mut parser, &source, Some(&edited_tree)).unwrap();
+
+        // Full reparse from scratch
+        let full = parser::parse(&mut parser, &source, None).unwrap();
+
+        assert_eq!(
+            incremental.root_node().to_sexp(),
+            full.root_node().to_sexp()
+        );
+    }
 }
