@@ -160,6 +160,7 @@ impl LanguageServer for Backend {
                     completion_item: None,
                 }),
                 references_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -458,6 +459,40 @@ impl LanguageServer for Backend {
                 }
                 _ => {}
             }
+        }
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let index = self.workspace_index.read().await;
+        let query = params.query.to_ascii_lowercase();
+
+        let symbols: Vec<SymbolInformation> = index
+            .all_symbols()
+            .into_iter()
+            .filter(|s| query.is_empty() || s.def.name.to_ascii_lowercase().contains(&query))
+            .map(|s| {
+                #[allow(deprecated)]
+                SymbolInformation {
+                    name: s.def.name.clone(),
+                    kind: SymbolKind::FUNCTION,
+                    tags: None,
+                    deprecated: None,
+                    location: Location {
+                        uri: s.uri.clone(),
+                        range: s.def.selection_range,
+                    },
+                    container_name: None,
+                }
+            })
+            .collect();
+
+        if symbols.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(symbols))
         }
     }
 
