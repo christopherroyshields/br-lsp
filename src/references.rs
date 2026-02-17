@@ -38,11 +38,11 @@ pub fn find_references(tree: &Tree, source: &str, line: usize, character: usize)
     }
 }
 
-fn escape_for_query(name: &str) -> String {
+pub(crate) fn escape_for_query(name: &str) -> String {
     let mut result = String::new();
     for ch in name.chars() {
         if ch == '$' {
-            result.push_str("\\$");
+            result.push_str("\\\\$");
         } else if ch.is_ascii_alphabetic() {
             result.push('[');
             result.push(ch.to_ascii_uppercase());
@@ -55,7 +55,7 @@ fn escape_for_query(name: &str) -> String {
     result
 }
 
-fn find_function_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Range> {
+pub(crate) fn find_function_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Range> {
     let name = node.utf8_text(source.as_bytes()).unwrap_or("");
     let escaped = escape_for_query(name);
     let query = format!("((function_name) @name (#match? @name \"^{escaped}$\"))");
@@ -65,7 +65,7 @@ fn find_function_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Ve
         .collect()
 }
 
-fn find_label_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Range> {
+pub(crate) fn find_label_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Range> {
     let text = node.utf8_text(source.as_bytes()).unwrap_or("");
     let name = text.trim_end_matches(':');
     let escaped = escape_for_query(name);
@@ -113,7 +113,7 @@ fn find_line_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Ra
         .collect()
 }
 
-fn find_variable_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Range> {
+pub(crate) fn find_variable_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Range> {
     let name = node.utf8_text(source.as_bytes()).unwrap_or("");
     let parent = match node.parent() {
         Some(p) => p,

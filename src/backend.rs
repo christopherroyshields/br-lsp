@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dashmap::DashMap;
@@ -13,10 +14,14 @@ use walkdir::WalkDir;
 
 use crate::builtins;
 use crate::check;
+use crate::definition;
 use crate::diagnostics;
 use crate::extract;
 use crate::parser;
 use crate::references;
+use crate::rename;
+use crate::semantic_tokens;
+use crate::symbols;
 use crate::workspace::{self, WorkspaceIndex};
 
 pub struct DocumentState {
@@ -27,10 +32,11 @@ pub struct DocumentState {
 
 pub struct Backend {
     pub client: Client,
-    pub document_map: DashMap<String, DocumentState>,
+    pub document_map: Arc<DashMap<String, DocumentState>>,
     pub parser: Mutex<tree_sitter::Parser>,
     pub workspace_index: Arc<tokio::sync::RwLock<WorkspaceIndex>>,
     pub workspace_folders: Arc<tokio::sync::RwLock<Vec<Url>>>,
+    pub indexing_complete: Arc<AtomicBool>,
 }
 
 struct TextDocumentItem {
@@ -110,6 +116,14 @@ impl Backend {
             let defs = extract::extract_definitions(t, &params.text);
             let mut index = self.workspace_index.write().await;
             index.update_file(&params.uri, defs);
+        }
+
+        // Check for undefined function calls (only after initial indexing is done)
+        if self.indexing_complete.load(Ordering::Acquire) {
+            if let Some(t) = tree.as_ref() {
+                let index = self.workspace_index.read().await;
+                diagnostics.extend(diagnostics::check_undefined_functions(t, &params.text, &index));
+            }
         }
 
         let uri_string = params.uri.to_string();
@@ -271,8 +285,23 @@ impl LanguageServer for Backend {
                     retrigger_characters: None,
                     work_done_progress_options: Default::default(),
                 }),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend: semantic_tokens::legend(),
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            ..Default::default()
+                        },
+                    ),
+                ),
+                definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                })),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -317,6 +346,8 @@ impl LanguageServer for Backend {
         let folders = self.workspace_folders.read().await.clone();
         let index = self.workspace_index.clone();
         let client = self.client.clone();
+        let indexing_complete = self.indexing_complete.clone();
+        let document_map = self.document_map.clone();
 
         tokio::spawn(async move {
             let token = NumberOrString::String("workspace-indexing".to_string());
@@ -381,6 +412,36 @@ impl LanguageServer for Backend {
                     format!("Workspace indexing complete: {summary}"),
                 )
                 .await;
+
+            indexing_complete.store(true, Ordering::Release);
+
+            // Re-publish diagnostics for all open documents now that the
+            // workspace index is available for undefined-function checks.
+            let to_publish: Vec<(String, Vec<Diagnostic>)> = {
+                let idx = index.read().await;
+                document_map
+                    .iter()
+                    .filter_map(|entry| {
+                        let uri_string = entry.key().clone();
+                        let doc = entry.value();
+                        let t = doc.tree.as_ref()?;
+                        let mut diags = parser::collect_diagnostics(t, &doc.source);
+                        diags.extend(diagnostics::collect_function_diagnostics(t, &doc.source));
+                        diags.extend(diagnostics::check_undefined_functions(
+                            t,
+                            &doc.source,
+                            &idx,
+                        ));
+                        Some((uri_string, diags))
+                    })
+                    .collect()
+            };
+
+            for (uri_string, diags) in to_publish {
+                if let Ok(uri) = Url::parse(&uri_string) {
+                    client.publish_diagnostics(uri, diags, None).await;
+                }
+            }
         });
     }
 
@@ -473,6 +534,20 @@ impl LanguageServer for Backend {
             index.update_file(&uri, defs);
         }
 
+        // Check for undefined function calls (only after initial indexing is done)
+        if self.indexing_complete.load(Ordering::Acquire) {
+            if let Some(doc) = self.document_map.get(&uri_string) {
+                if let Some(t) = doc.tree.as_ref() {
+                    let index = self.workspace_index.read().await;
+                    diagnostics.extend(diagnostics::check_undefined_functions(
+                        t,
+                        &doc.source,
+                        &index,
+                    ));
+                }
+            }
+        }
+
         let total_elapsed = start.elapsed();
 
         self.client
@@ -536,6 +611,136 @@ impl LanguageServer for Backend {
         });
 
         Ok(locations)
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let uri_string = params.text_document.uri.to_string();
+        let result = self.document_map.get(&uri_string).and_then(|doc| {
+            let tree = doc.tree.as_ref()?;
+            let r = rename::prepare_rename(
+                tree,
+                &doc.source,
+                params.position.line as usize,
+                params.position.character as usize,
+            )?;
+            Some(PrepareRenameResponse::RangeWithPlaceholder {
+                range: r.range,
+                placeholder: r.placeholder,
+            })
+        });
+        Ok(result)
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = params.text_document_position.text_document.uri.clone();
+        let uri_string = uri.to_string();
+        let position = params.text_document_position.position;
+        let edits = self.document_map.get(&uri_string).and_then(|doc| {
+            let tree = doc.tree.as_ref()?;
+            let text_edits = rename::compute_renames(
+                tree,
+                &doc.source,
+                position.line as usize,
+                position.character as usize,
+                &params.new_name,
+            );
+            if text_edits.is_empty() {
+                None
+            } else {
+                Some(text_edits)
+            }
+        });
+
+        match edits {
+            Some(text_edits) => {
+                let mut changes = std::collections::HashMap::new();
+                changes.insert(uri, text_edits);
+                Ok(Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri.clone();
+        let uri_string = uri.to_string();
+        let position = params.text_document_position_params.position;
+
+        let result = self.document_map.get(&uri_string).and_then(|doc| {
+            let tree = doc.tree.as_ref()?;
+            Some(definition::find_definition(
+                tree,
+                &doc.source,
+                position.line as usize,
+                position.character as usize,
+            ))
+        });
+
+        match result {
+            Some(definition::DefinitionResult::Found(range)) => {
+                Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                    uri,
+                    range,
+                })))
+            }
+            Some(definition::DefinitionResult::LookupFunction(name)) => {
+                let index = self.workspace_index.read().await;
+                let defs = index.lookup(&name);
+                if let Some(def) = defs.first() {
+                    Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: def.uri.clone(),
+                        range: def.def.selection_range,
+                    })))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri_string = params.text_document.uri.to_string();
+        let result = self.document_map.get(&uri_string).and_then(|doc| {
+            let tree = doc.tree.as_ref()?;
+            Some(symbols::collect_document_symbols(tree, &doc.source))
+        });
+        match result {
+            Some(syms) if !syms.is_empty() => {
+                Ok(Some(DocumentSymbolResponse::Nested(syms)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let uri = params.text_document.uri.to_string();
+        let tokens = self.document_map.get(&uri).and_then(|doc| {
+            let tree = doc.tree.as_ref()?;
+            Some(semantic_tokens::collect_tokens(tree, &doc.source))
+        });
+        match tokens {
+            Some(t) => Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+                result_id: None,
+                data: t,
+            }))),
+            None => Ok(None),
+        }
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {

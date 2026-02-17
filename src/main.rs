@@ -1,10 +1,14 @@
 mod backend;
 mod builtins;
 mod check;
+mod definition;
 mod diagnostics;
 mod extract;
 mod parser;
 mod references;
+mod rename;
+mod semantic_tokens;
+mod symbols;
 mod workspace;
 
 use std::sync::Arc;
@@ -54,10 +58,11 @@ async fn run_lsp() {
 
     let (service, socket) = LspService::build(|client| Backend {
         client,
-        document_map: DashMap::new(),
+        document_map: Arc::new(DashMap::new()),
         parser: std::sync::Mutex::new(parser::new_parser()),
         workspace_index: Arc::new(RwLock::new(WorkspaceIndex::new())),
         workspace_folders: Arc::new(RwLock::new(Vec::new())),
+        indexing_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
     .finish();
 
