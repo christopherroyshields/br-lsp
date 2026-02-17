@@ -15,6 +15,7 @@ use walkdir::WalkDir;
 use crate::builtins;
 use crate::check;
 use crate::code_action;
+use crate::completions;
 use crate::definition;
 use crate::diagnostics;
 use crate::extract;
@@ -660,8 +661,19 @@ impl LanguageServer for Backend {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri.to_string();
-        debug!("completion requested for {}", uri);
-        Ok(None)
+        let position = params.text_document_position.position;
+
+        let index = self.workspace_index.read().await;
+        let items = match self.document_map.get(&uri) {
+            Some(doc) => completions::get_completions(&doc, &uri, position, &index),
+            None => return Ok(None),
+        };
+
+        if items.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(CompletionResponse::Array(items)))
+        }
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {

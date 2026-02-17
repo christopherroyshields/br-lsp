@@ -84,6 +84,10 @@ pub fn lookup(name: &str) -> &'static [BuiltinFunction] {
         .unwrap_or(&[])
 }
 
+pub fn all() -> impl Iterator<Item = &'static BuiltinFunction> {
+    BUILTINS.values().flat_map(|v| v.iter())
+}
+
 impl BuiltinFunction {
     pub fn format_signature(&self) -> String {
         if self.params.is_empty() {
