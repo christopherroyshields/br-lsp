@@ -1,6 +1,7 @@
 mod backend;
 mod builtins;
 mod check;
+mod code_action;
 mod definition;
 mod diagnostics;
 mod extract;

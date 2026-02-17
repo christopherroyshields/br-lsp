@@ -14,6 +14,7 @@ use walkdir::WalkDir;
 
 use crate::builtins;
 use crate::check;
+use crate::code_action;
 use crate::definition;
 use crate::diagnostics;
 use crate::extract;
@@ -201,6 +202,79 @@ impl Backend {
             .collect()
     }
 
+    /// Search all workspace files (open + closed) for references to a function name.
+    async fn search_workspace_for_function_refs(&self, name: &str) -> Vec<Location> {
+        let mut locations = Vec::new();
+
+        // 1. Open documents
+        let mut open_uris = std::collections::HashSet::new();
+        for entry in self.document_map.iter() {
+            let uri_string = entry.key().clone();
+            open_uris.insert(uri_string.clone());
+            if let Some(tree) = entry.value().tree.as_ref() {
+                let refs = references::find_function_refs_by_name(name, tree, &entry.value().source);
+                if let Ok(uri) = Url::parse(&uri_string) {
+                    for range in refs {
+                        locations.push(Location {
+                            uri: uri.clone(),
+                            range,
+                        });
+                    }
+                }
+            }
+        }
+
+        // 2. Closed files — parallel walk of workspace folders
+        let folders = self.workspace_folders.read().await.clone();
+        let name_owned = name.to_string();
+        let open_uris_clone = open_uris;
+
+        let closed_locations = tokio::task::spawn_blocking(move || {
+            let mut results = Vec::new();
+            for folder in &folders {
+                let path = match folder.to_file_path() {
+                    Ok(p) => p,
+                    Err(()) => continue,
+                };
+
+                let file_paths: Vec<_> = WalkDir::new(&path)
+                    .follow_links(true)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file() && workspace::is_br_file(e.path()))
+                    .map(|e| e.into_path())
+                    .collect();
+
+                let folder_results: Vec<Location> = file_paths
+                    .par_iter()
+                    .filter_map(|file_path| {
+                        let uri = Url::from_file_path(file_path).ok()?;
+                        if open_uris_clone.contains(uri.as_str()) {
+                            return None;
+                        }
+                        let source = workspace::read_br_file(file_path).ok()?;
+                        let mut parser = parser::new_parser();
+                        let tree = parser::parse(&mut parser, &source, None)?;
+                        let refs = references::find_function_refs_by_name(&name_owned, &tree, &source);
+                        if refs.is_empty() {
+                            return None;
+                        }
+                        Some(refs.into_iter().map(|range| Location { uri: uri.clone(), range }).collect::<Vec<_>>())
+                    })
+                    .flatten()
+                    .collect();
+
+                results.extend(folder_results);
+            }
+            results
+        })
+        .await
+        .unwrap_or_default();
+
+        locations.extend(closed_locations);
+        locations
+    }
+
     fn scan_workspace_diagnostics(folder: &Url) -> Vec<(Url, Vec<Diagnostic>)> {
         let path = match folder.to_file_path() {
             Ok(p) => p,
@@ -298,6 +372,12 @@ impl LanguageServer for Backend {
                 references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Options(
+                    CodeActionOptions {
+                        code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                        ..Default::default()
+                    },
+                )),
                 rename_provider: Some(OneOf::Right(RenameOptions {
                     prepare_provider: Some(true),
                     work_done_progress_options: Default::default(),
@@ -588,6 +668,32 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri.clone();
         let uri_string = uri.to_string();
         let position = params.text_document_position.position;
+
+        // Check if cursor is on a user function name (cross-file candidate)
+        let fn_name = self.document_map.get(&uri_string).and_then(|doc| {
+            let tree = doc.tree.as_ref()?;
+            let name = references::resolve_function_name_at(
+                tree,
+                &doc.source,
+                position.line as usize,
+                position.character as usize,
+            )?;
+            if !builtins::lookup(&name).is_empty() {
+                return None; // system function — stay single-file
+            }
+            Some(name)
+        });
+
+        if let Some(name) = fn_name {
+            // Cross-file search for user function references
+            let locations = self.search_workspace_for_function_refs(&name).await;
+            if locations.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(locations));
+        }
+
+        // Non-function symbols: single-file references
         let locations = self.document_map.get(&uri_string).and_then(|doc| {
             let tree = doc.tree.as_ref()?;
             let refs = references::find_references(
@@ -638,6 +744,43 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri.clone();
         let uri_string = uri.to_string();
         let position = params.text_document_position.position;
+
+        // Check if cursor is on a user function name (cross-file candidate)
+        let fn_name = self.document_map.get(&uri_string).and_then(|doc| {
+            let tree = doc.tree.as_ref()?;
+            let name = references::resolve_function_name_at(
+                tree,
+                &doc.source,
+                position.line as usize,
+                position.character as usize,
+            )?;
+            if !builtins::lookup(&name).is_empty() {
+                return None; // system function — rejected by prepare_rename
+            }
+            Some(name)
+        });
+
+        if let Some(name) = fn_name {
+            // Cross-file rename for user functions
+            let locations = self.search_workspace_for_function_refs(&name).await;
+            if locations.is_empty() {
+                return Ok(None);
+            }
+            let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+                std::collections::HashMap::new();
+            for loc in locations {
+                changes.entry(loc.uri).or_default().push(TextEdit {
+                    range: loc.range,
+                    new_text: params.new_name.clone(),
+                });
+            }
+            return Ok(Some(WorkspaceEdit {
+                changes: Some(changes),
+                ..Default::default()
+            }));
+        }
+
+        // Non-function symbols: single-file rename
         let edits = self.document_map.get(&uri_string).and_then(|doc| {
             let tree = doc.tree.as_ref()?;
             let text_edits = rename::compute_renames(
@@ -665,6 +808,34 @@ impl LanguageServer for Backend {
             }
             None => Ok(None),
         }
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri;
+        let uri_string = uri.to_string();
+        let doc = match self.document_map.get(&uri_string) {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+        let tree = match doc.tree.as_ref() {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        let mut actions = Vec::new();
+        for diag in &params.context.diagnostics {
+            if let Some(action) =
+                code_action::create_function_stub_action(&uri, diag, tree, &doc.source)
+            {
+                actions.push(CodeActionOrCommand::CodeAction(action));
+            }
+        }
+
+        Ok(if actions.is_empty() {
+            None
+        } else {
+            Some(actions)
+        })
     }
 
     async fn goto_definition(
@@ -695,7 +866,12 @@ impl LanguageServer for Backend {
             Some(definition::DefinitionResult::LookupFunction(name)) => {
                 let index = self.workspace_index.read().await;
                 let defs = index.lookup(&name);
-                if let Some(def) = defs.first() {
+                // Prefer actual def statements over library import entries
+                let def = defs
+                    .iter()
+                    .find(|d| !d.def.is_import_only)
+                    .or_else(|| defs.first());
+                if let Some(def) = def {
                     Ok(Some(GotoDefinitionResponse::Scalar(Location {
                         uri: def.uri.clone(),
                         range: def.def.selection_range,

@@ -13,6 +13,26 @@ const SUPPORTED_KINDS: &[&str] = &[
     "numberidentifier",
 ];
 
+/// If the node at (line, character) is a `function_name`, return its text.
+/// Uses the same end-of-token fallback as `find_references`.
+pub fn resolve_function_name_at(tree: &Tree, source: &str, line: usize, character: usize) -> Option<String> {
+    let mut node = node_at_position(tree, line, character)?;
+
+    if !SUPPORTED_KINDS.contains(&node.kind()) && character > 0 {
+        if let Some(n) = node_at_position(tree, line, character - 1) {
+            if SUPPORTED_KINDS.contains(&n.kind()) {
+                node = n;
+            }
+        }
+    }
+
+    if node.kind() == "function_name" {
+        Some(node.utf8_text(source.as_bytes()).ok()?.to_string())
+    } else {
+        None
+    }
+}
+
 pub fn find_references(tree: &Tree, source: &str, line: usize, character: usize) -> Vec<Range> {
     let mut node = match node_at_position(tree, line, character) {
         Some(n) => n,
@@ -57,6 +77,10 @@ pub(crate) fn escape_for_query(name: &str) -> String {
 
 pub(crate) fn find_function_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Range> {
     let name = node.utf8_text(source.as_bytes()).unwrap_or("");
+    find_function_refs_by_name(name, tree, source)
+}
+
+pub fn find_function_refs_by_name(name: &str, tree: &Tree, source: &str) -> Vec<Range> {
     let escaped = escape_for_query(name);
     let query = format!("((function_name) @name (#match? @name \"^{escaped}$\"))");
     run_query(&query, tree.root_node(), source)
@@ -393,5 +417,71 @@ let Z = X + 2
         // cursor right after `fnTest` (col 10 = one past the last char)
         let refs = parse_and_find(source, 0, 10);
         assert_eq!(refs.len(), 2);
+    }
+
+    // --- find_function_refs_by_name tests ---
+
+    fn parse_tree(source: &str) -> Tree {
+        let mut p = parser::new_parser();
+        parser::parse(&mut p, source, None).unwrap()
+    }
+
+    #[test]
+    fn find_function_refs_by_name_basic() {
+        let source = "def fnTest(x)\nlet y = fnTest(1)\nfnend\n";
+        let tree = parse_tree(source);
+        let refs = find_function_refs_by_name("fnTest", &tree, source);
+        assert_eq!(refs.len(), 2);
+    }
+
+    #[test]
+    fn find_function_refs_by_name_case_insensitive() {
+        let source = "def fnTest(x)\nlet y = FNTEST(1)\nfnend\n";
+        let tree = parse_tree(source);
+        let refs = find_function_refs_by_name("fntest", &tree, source);
+        assert_eq!(refs.len(), 2);
+    }
+
+    #[test]
+    fn find_function_refs_by_name_no_match() {
+        let source = "def fnTest(x)\nfnend\n";
+        let tree = parse_tree(source);
+        let refs = find_function_refs_by_name("fnOther", &tree, source);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn find_function_refs_by_name_library_import() {
+        let source = "library \"utils\": fnCalc, fnOther\nlet x = fnCalc(1)\n";
+        let tree = parse_tree(source);
+        let refs = find_function_refs_by_name("fnCalc", &tree, source);
+        assert_eq!(refs.len(), 2); // library import + call
+    }
+
+    // --- resolve_function_name_at tests ---
+
+    #[test]
+    fn resolve_function_name_at_function() {
+        let source = "def fnTest(x)\nfnend\n";
+        let tree = parse_tree(source);
+        let name = resolve_function_name_at(&tree, source, 0, 4);
+        assert_eq!(name.as_deref(), Some("fnTest"));
+    }
+
+    #[test]
+    fn resolve_function_name_at_variable() {
+        let source = "let X = 1\n";
+        let tree = parse_tree(source);
+        let name = resolve_function_name_at(&tree, source, 0, 4);
+        assert!(name.is_none());
+    }
+
+    #[test]
+    fn resolve_function_name_at_end_of_token() {
+        let source = "def fnTest(x)\nfnend\n";
+        let tree = parse_tree(source);
+        // col 10 = one past last char of "fnTest"
+        let name = resolve_function_name_at(&tree, source, 0, 10);
+        assert_eq!(name.as_deref(), Some("fnTest"));
     }
 }

@@ -9,6 +9,7 @@ pub struct FunctionDef {
     pub range: Range,
     pub selection_range: Range,
     pub is_library: bool,
+    pub is_import_only: bool,
     pub params: Vec<ParamInfo>,
     pub has_param_substitution: bool,
     pub documentation: Option<String>,
@@ -93,16 +94,50 @@ pub fn extract_definitions(tree: &Tree, source: &str) -> Vec<FunctionDef> {
 }
 
 fn collect_def_statements(node: Node, source: &str, defs: &mut Vec<FunctionDef>) {
-    if node.kind() == "def_statement" {
-        if let Some(def) = extract_one_def(node, source) {
-            defs.push(def);
+    match node.kind() {
+        "def_statement" => {
+            if let Some(def) = extract_one_def(node, source) {
+                defs.push(def);
+            }
+            return;
         }
-        return;
+        "library_statement" => {
+            collect_library_imports(node, source, defs);
+            return;
+        }
+        _ => {}
     }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_def_statements(child, source, defs);
+    }
+}
+
+/// Extract function names declared via `LIBRARY path: fnA, fnB$` import statements.
+fn collect_library_imports(lib_node: Node, source: &str, defs: &mut Vec<FunctionDef>) {
+    let mut cursor = lib_node.walk();
+    for child in lib_node.children(&mut cursor) {
+        if child.kind() == "library_function_list" {
+            let mut inner = child.walk();
+            for grandchild in child.children(&mut inner) {
+                if grandchild.kind() == "function_name" {
+                    if let Ok(name) = grandchild.utf8_text(source.as_bytes()) {
+                        defs.push(FunctionDef {
+                            name: name.to_string(),
+                            range: node_range(lib_node),
+                            selection_range: node_range(grandchild),
+                            is_library: true,
+                            is_import_only: true,
+                            params: Vec::new(),
+                            has_param_substitution: false,
+                            documentation: None,
+                            return_documentation: None,
+                        });
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -233,6 +268,7 @@ fn extract_one_def(def_node: Node, source: &str) -> Option<FunctionDef> {
         range,
         selection_range,
         is_library,
+        is_import_only: false,
         params,
         has_param_substitution,
         documentation,
@@ -486,6 +522,18 @@ def fnAdd(A, B) = A + B
         assert_eq!(defs.len(), 1);
         assert!(defs[0].documentation.is_none());
         assert!(defs[0].return_documentation.is_none());
+    }
+
+    #[test]
+    fn library_import_statement() {
+        let defs = parse_and_extract("library \"vol002\\rtflib.dll\": fnRTF, fnRTFStart$\n");
+        assert_eq!(defs.len(), 2);
+        assert_eq!(defs[0].name, "fnRTF");
+        assert!(defs[0].is_library);
+        assert!(defs[0].params.is_empty());
+        assert_eq!(defs[1].name, "fnRTFStart$");
+        assert!(defs[1].is_library);
+        assert!(defs[1].params.is_empty());
     }
 
     #[test]

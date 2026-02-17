@@ -64,6 +64,24 @@
         "key": "ctrl+alt+7"
       }
     ],
+    "semanticTokenScopes": [
+      {
+        "language": "br",
+        "scopes": {
+          "keyword": ["keyword.statement.br"],
+          "keyword.controlFlow": ["keyword.control.br"],
+          "function": ["entity.name.function.br"],
+          "function.defaultLibrary": ["entity.name.function.br"],
+          "variable": ["variable.numeric.br"],
+          "number": ["constant.numeric.br"],
+          "property": ["string.regexp.line-label.br"],
+          "property.definition": ["string.regexp.line-label.br"],
+          "enumMember": ["keyword.errorcondition.br"],
+          "operator": ["keyword.operator.mathematical.br"],
+          "lineNumber": ["linenumber.br"]
+        }
+      }
+    ],
     "configuration": {
       "type": "object",
       "title": "BR Language Server",

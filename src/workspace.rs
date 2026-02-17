@@ -48,7 +48,6 @@ impl WorkspaceIndex {
         self.add_file(uri, defs);
     }
 
-    #[allow(dead_code)]
     pub fn lookup(&self, name: &str) -> &[IndexedFunctionDef] {
         self.definitions
             .get(&name.to_ascii_lowercase())
@@ -68,6 +67,9 @@ pub fn read_br_file(path: &Path) -> std::io::Result<String> {
     // so we do a manual byte-to-char mapping for the 128-255 range.
     let mut output = String::with_capacity(bytes.len());
     for &b in &bytes {
+        if b == 0x1A {
+            continue; // Skip DOS EOF marker
+        }
         output.push(cp437_to_char(b));
     }
     Ok(output)
@@ -140,6 +142,7 @@ mod tests {
                 },
             },
             is_library,
+            is_import_only: false,
             params: vec![],
             has_param_substitution: false,
             documentation: None,
@@ -267,6 +270,7 @@ mod tests {
             range: Range::default(),
             selection_range: Range::default(),
             is_library: true,
+            is_import_only: false,
             params: vec![
                 ParamInfo {
                     name: "X".to_string(),

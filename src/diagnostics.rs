@@ -1,14 +1,77 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
+use crate::workspace::WorkspaceIndex;
 use crate::{builtins, extract, extract::ParamKind, parser};
 
 pub fn collect_function_diagnostics(tree: &Tree, source: &str) -> Vec<Diagnostic> {
     let mut diagnostics = check_missing_fnend(tree, source);
     diagnostics.extend(check_duplicate_functions(tree, source));
     diagnostics.extend(check_parameter_count(tree, source));
+    diagnostics
+}
+
+pub fn check_undefined_functions(
+    tree: &Tree,
+    source: &str,
+    index: &WorkspaceIndex,
+) -> Vec<Diagnostic> {
+    let language = tree.language();
+    let query = match Query::new(
+        &language,
+        "(numeric_user_function) @call
+         (string_user_function) @call",
+    ) {
+        Ok(q) => q,
+        Err(_) => return Vec::new(),
+    };
+
+    // Build local names set from definitions in this file
+    let local_defs = extract::extract_definitions(tree, source);
+    let local_names: HashSet<String> = local_defs
+        .iter()
+        .map(|d| d.name.to_ascii_lowercase())
+        .collect();
+
+    let bytes = source.as_bytes();
+    let mut diagnostics = Vec::new();
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), bytes);
+
+    while let Some(m) = matches.next() {
+        let call_node = m.captures[0].node;
+
+        // Extract function_name child
+        let name_node = match call_node
+            .children(&mut call_node.walk())
+            .find(|c| c.kind() == "function_name")
+        {
+            Some(n) => n,
+            None => continue,
+        };
+        let fn_name = match name_node.utf8_text(bytes) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        let key = fn_name.to_ascii_lowercase();
+
+        // Skip if defined locally or in workspace index
+        if local_names.contains(&key) || !index.lookup(&key).is_empty() {
+            continue;
+        }
+
+        diagnostics.push(Diagnostic {
+            range: parser::node_range(name_node),
+            severity: Some(DiagnosticSeverity::WARNING),
+            code: Some(NumberOrString::String("undefined-function".to_string())),
+            message: format!("Function '{fn_name}' is not defined in the workspace"),
+            ..Default::default()
+        });
+    }
+
     diagnostics
 }
 
@@ -167,7 +230,7 @@ fn check_duplicate_functions(tree: &Tree, source: &str) -> Vec<Diagnostic> {
         if seen.contains_key(key) {
             diagnostics.push(Diagnostic {
                 range: *range,
-                severity: Some(DiagnosticSeverity::ERROR),
+                severity: Some(DiagnosticSeverity::WARNING),
                 message: format!("Function '{name}' is already defined in this file"),
                 ..Default::default()
             });
@@ -216,7 +279,7 @@ fn builtin_param_counts(func: &builtins::BuiltinFunction) -> (usize, usize) {
 }
 
 /// Determine the type of an argument node by walking: argument → expression → concrete type.
-fn argument_type(arg_node: Node) -> Option<ParamKind> {
+pub(crate) fn argument_type(arg_node: Node) -> Option<ParamKind> {
     // argument's first named child should be `expression`
     let expr = arg_node.named_child(0)?;
     if expr.kind() != "expression" {
@@ -235,7 +298,7 @@ fn argument_type(arg_node: Node) -> Option<ParamKind> {
 
 /// Collect argument nodes paired with their positional index from an `arguments` node.
 /// Empty positions (e.g. between consecutive commas) yield (index, None).
-fn collect_argument_nodes<'a>(args_node: Node<'a>, source: &[u8]) -> Vec<(usize, Option<Node<'a>>)> {
+pub(crate) fn collect_argument_nodes<'a>(args_node: Node<'a>, source: &[u8]) -> Vec<(usize, Option<Node<'a>>)> {
     let mut result = Vec::new();
     let mut pos = 0;
     let mut has_any = false;
@@ -358,8 +421,9 @@ fn check_parameter_count(tree: &Tree, source: &str) -> Vec<Diagnostic> {
                 None => continue,
             };
             // Skip checking functions with param substitutions (e.g. [[Name]])
-            // since we don't know the actual parameter count/types
-            if def.has_param_substitution {
+            // or import-only declarations (LIBRARY "path": fnName) since we
+            // don't know the actual parameter count/types
+            if def.has_param_substitution || def.is_import_only {
                 continue;
             }
             let required = def.params.iter().filter(|p| !p.is_optional).count();
@@ -849,5 +913,95 @@ mod tests {
             eprintln!("line {line}: {}", d.message);
         }
         eprintln!("\nTotal: {} parameter count diagnostics", diags.len());
+    }
+
+    // --- Undefined function tests ---
+
+    #[test]
+    fn undefined_function_warns() {
+        let source = "let X=fnFoo(1)\n";
+        let tree = parse(source);
+        let index = WorkspaceIndex::new();
+        let diags = check_undefined_functions(&tree, source, &index);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fnFoo"));
+        assert!(diags[0].message.contains("not defined"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
+    }
+
+    #[test]
+    fn defined_locally_no_warning() {
+        let source = "def fnFoo(X)=X*2\nlet Y=fnFoo(1)\n";
+        let tree = parse(source);
+        let index = WorkspaceIndex::new();
+        let diags = check_undefined_functions(&tree, source, &index);
+        assert!(diags.is_empty(), "locally defined function should not warn");
+    }
+
+    #[test]
+    fn defined_in_workspace_no_warning() {
+        let source = "let X=fnFoo(1)\n";
+        let tree = parse(source);
+
+        let mut index = WorkspaceIndex::new();
+        let uri = tower_lsp::lsp_types::Url::parse("file:///other.brs").unwrap();
+        index.add_file(
+            &uri,
+            vec![extract::FunctionDef {
+                name: "fnFoo".to_string(),
+                range: Default::default(),
+                selection_range: Default::default(),
+                is_library: false,
+                is_import_only: false,
+                params: vec![],
+                has_param_substitution: false,
+                documentation: None,
+                return_documentation: None,
+            }],
+        );
+
+        let diags = check_undefined_functions(&tree, source, &index);
+        assert!(diags.is_empty(), "workspace-defined function should not warn");
+    }
+
+    #[test]
+    fn undefined_case_insensitive() {
+        let source = "def fnfoo(X)=X\nlet Y=FNFOO(1)\n";
+        let tree = parse(source);
+        let index = WorkspaceIndex::new();
+        let diags = check_undefined_functions(&tree, source, &index);
+        assert!(diags.is_empty(), "case-insensitive match should not warn");
+    }
+
+    #[test]
+    fn undefined_string_function() {
+        let source = "let X$=fnName$(\"hi\")\n";
+        let tree = parse(source);
+        let index = WorkspaceIndex::new();
+        let diags = check_undefined_functions(&tree, source, &index);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fnName$"));
+        assert!(diags[0].message.contains("not defined"));
+    }
+
+    #[test]
+    fn library_import_not_flagged() {
+        let source = "library \"rtflib.dll\": fnRTF\nlet X=fnRTF(1,2,3)\n";
+        let tree = parse(source);
+        let index = WorkspaceIndex::new();
+        let diags = check_undefined_functions(&tree, source, &index);
+        assert!(
+            diags.is_empty(),
+            "LIBRARY-imported function should not warn: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn system_function_not_flagged() {
+        let source = "let X=Val(\"5\")\n";
+        let tree = parse(source);
+        let index = WorkspaceIndex::new();
+        let diags = check_undefined_functions(&tree, source, &index);
+        assert!(diags.is_empty(), "system functions should not be checked");
     }
 }
