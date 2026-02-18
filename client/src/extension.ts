@@ -1,5 +1,6 @@
 import { commands, Uri, workspace, ExtensionContext, window } from "vscode";
 
+import { activateLineNumbers } from "./line-numbers";
 import { activateNextPrev } from "./next-prev";
 import {
   Executable,
@@ -75,6 +76,7 @@ export async function activate(context: ExtensionContext) {
   });
   context.subscriptions.push(scanAllCmd);
 
+  activateLineNumbers(context);
   activateNextPrev(context);
 }
 

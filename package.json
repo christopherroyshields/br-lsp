@@ -78,6 +78,10 @@
       {
         "command": "br-lsp.prevOccurrence",
         "title": "BR: Previous Occurrence"
+      },
+      {
+        "command": "br-lsp.autoInsertLineNumber",
+        "title": "BR: Auto Insert Line Number"
       }
     ],
     "keybindings": [
@@ -94,6 +98,11 @@
         "command": "br-lsp.prevOccurrence",
         "key": "ctrl+shift+up",
         "when": "editorTextFocus && editorLangId == br"
+      },
+      {
+        "command": "br-lsp.autoInsertLineNumber",
+        "key": "enter",
+        "when": "editorTextFocus && editorLangId == br && !suggestWidgetVisible && !renameInputVisible && !inSnippetMode && !quickFixWidgetVisible"
       }
     ],
     "semanticTokenScopes": [
@@ -123,6 +132,24 @@
       "type": "object",
       "title": "BR Language Server",
       "properties": {
+        "br-lsp.autoLineNumbers.enabled": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": true,
+          "description": "Automatically add line numbers when pressing Enter if the current line has a line number."
+        },
+        "br-lsp.autoLineNumbers.increment": {
+          "type": "number",
+          "scope": "resource",
+          "default": 10,
+          "description": "Default increment for auto-generated line numbers. Will be overridden by detected pattern from surrounding lines."
+        },
+        "br-lsp.autoLineNumbers.zeroPadding": {
+          "type": "number",
+          "scope": "resource",
+          "default": 5,
+          "description": "Number of digits for line numbers (e.g., 5 for '00100'). Will be overridden by detected padding from surrounding lines."
+        },
         "br-lsp.trace.server": {
           "type": "string",
           "scope": "window",
