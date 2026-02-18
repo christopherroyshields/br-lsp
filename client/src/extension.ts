@@ -1,5 +1,6 @@
 import { commands, Uri, workspace, ExtensionContext, window } from "vscode";
 
+import { activateNextPrev } from "./next-prev";
 import {
   Executable,
   LanguageClient,
@@ -73,6 +74,8 @@ export async function activate(context: ExtensionContext) {
     }
   });
   context.subscriptions.push(scanAllCmd);
+
+  activateNextPrev(context);
 }
 
 export function deactivate(): Thenable<void> | undefined {

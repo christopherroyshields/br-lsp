@@ -60,16 +60,40 @@
         "path": "./syntaxes/br.tmLanguage.json"
       }
     ],
+    "snippets": [
+      { "language": "br", "path": "./snippets/fileio.json" },
+      { "language": "br", "path": "./snippets/lexi.json" },
+      { "language": "br", "path": "./snippets/loops.json" },
+      { "language": "br", "path": "./snippets/statements.json" }
+    ],
     "commands": [
       {
         "command": "br-lsp.scanAll",
         "title": "BR: Scan All Project Source"
+      },
+      {
+        "command": "br-lsp.nextOccurrence",
+        "title": "BR: Next Occurrence"
+      },
+      {
+        "command": "br-lsp.prevOccurrence",
+        "title": "BR: Previous Occurrence"
       }
     ],
     "keybindings": [
       {
         "command": "br-lsp.scanAll",
         "key": "ctrl+alt+7"
+      },
+      {
+        "command": "br-lsp.nextOccurrence",
+        "key": "ctrl+shift+down",
+        "when": "editorTextFocus && editorLangId == br"
+      },
+      {
+        "command": "br-lsp.prevOccurrence",
+        "key": "ctrl+shift+up",
+        "when": "editorTextFocus && editorLangId == br"
       }
     ],
     "semanticTokenScopes": [
