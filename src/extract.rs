@@ -34,24 +34,36 @@ pub enum ParamKind {
 }
 
 impl FunctionDef {
+    /// Returns the visible params, truncated before the first `___` parameter.
+    pub fn visible_params(&self) -> &[ParamInfo] {
+        let end = self
+            .params
+            .iter()
+            .position(|p| p.name.starts_with("___"))
+            .unwrap_or(self.params.len());
+        &self.params[..end]
+    }
+
     pub fn format_signature(&self) -> String {
-        if self.params.is_empty() {
+        let visible = self.visible_params();
+        if visible.is_empty() {
             return self.name.clone();
         }
-        let params: Vec<String> = self.params.iter().map(|p| p.format_label()).collect();
+        let params: Vec<String> = visible.iter().map(|p| p.format_label()).collect();
         format!("{}({})", self.name, params.join(", "))
     }
 
     pub fn format_signature_with_offsets(&self) -> (String, Vec<[u32; 2]>) {
-        if self.params.is_empty() {
+        let visible = self.visible_params();
+        if visible.is_empty() {
             return (self.name.clone(), Vec::new());
         }
 
         let mut label = self.name.clone();
         label.push('(');
-        let mut offsets = Vec::with_capacity(self.params.len());
+        let mut offsets = Vec::with_capacity(visible.len());
 
-        for (i, param) in self.params.iter().enumerate() {
+        for (i, param) in visible.iter().enumerate() {
             if i > 0 {
                 label.push_str(", ");
             }
