@@ -1,5 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
 use tower_lsp::lsp_types::*;
 
 use crate::backend::DocumentState;
@@ -7,6 +8,62 @@ use crate::builtins;
 use crate::extract;
 use crate::parser;
 use crate::workspace::WorkspaceIndex;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum CompletionData {
+    #[serde(rename = "builtin")]
+    Builtin { name: String, overload: usize },
+    #[serde(rename = "local")]
+    Local { name: String, uri: String },
+    #[serde(rename = "workspace")]
+    Workspace { name: String },
+}
+
+pub fn format_builtin_docs(b: &builtins::BuiltinFunction) -> String {
+    let sig = b.format_signature();
+    let mut md_parts = vec![format!("```br\n{sig}\n```")];
+    if let Some(doc) = &b.documentation {
+        md_parts.push(doc.clone());
+    }
+    let param_docs: Vec<String> = b
+        .params
+        .iter()
+        .filter_map(|p| {
+            p.documentation
+                .as_ref()
+                .map(|d| format!("*@param* `{}` \u{2014} {d}", p.name))
+        })
+        .collect();
+    if !param_docs.is_empty() {
+        md_parts.push(param_docs.join("\n\n"));
+    }
+    md_parts.join("\n\n")
+}
+
+pub fn format_function_docs(d: &extract::FunctionDef) -> String {
+    let sig = d.format_signature();
+    let mut md_parts = vec![format!("```br\n{sig}\n```")];
+    if let Some(doc) = &d.documentation {
+        md_parts.push(doc.clone());
+    }
+    let param_docs: Vec<String> = d
+        .params
+        .iter()
+        .filter_map(|p| {
+            p.documentation
+                .as_ref()
+                .map(|doc| format!("*@param* `{}` \u{2014} {doc}", p.format_label()))
+        })
+        .collect();
+    if !param_docs.is_empty() {
+        md_parts.push(param_docs.join("\n\n"));
+    }
+    if let Some(ret) = &d.return_documentation {
+        md_parts.push(format!("*@returns* \u{2014} {ret}"));
+    }
+    md_parts.join("\n\n")
+}
 
 pub fn get_completions(
     doc: &DocumentState,
@@ -21,7 +78,7 @@ pub fn get_completions(
 
     if let Some(tree) = doc.tree.as_ref() {
         items.extend(local_variable_completions(tree, &doc.source, position));
-        items.extend(local_function_completions(tree, &doc.source));
+        items.extend(local_function_completions(tree, &doc.source, uri));
     }
 
     items.extend(library_function_completions(uri, workspace_index));
@@ -448,36 +505,29 @@ fn keyword_completions() -> Vec<CompletionItem> {
 // ---------------------------------------------------------------------------
 
 fn builtin_function_completions() -> Vec<CompletionItem> {
+    let mut overload_counts: HashMap<String, usize> = HashMap::new();
+
     builtins::all()
         .map(|b| {
             let sig = b.format_signature();
             let detail = format!("(built-in) {sig}");
 
-            let mut md_parts = vec![format!("```br\n{sig}\n```")];
-            if let Some(doc) = &b.documentation {
-                md_parts.push(doc.clone());
-            }
-            let param_docs: Vec<String> = b
-                .params
-                .iter()
-                .filter_map(|p| {
-                    p.documentation
-                        .as_ref()
-                        .map(|d| format!("*@param* `{}` \u{2014} {d}", p.name))
-                })
-                .collect();
-            if !param_docs.is_empty() {
-                md_parts.push(param_docs.join("\n\n"));
-            }
+            let key = b.name.to_ascii_lowercase();
+            let overload = *overload_counts.get(&key).unwrap_or(&0);
+            *overload_counts.entry(key).or_insert(0) += 1;
+
+            let data = serde_json::to_value(CompletionData::Builtin {
+                name: b.name.clone(),
+                overload,
+            })
+            .ok();
 
             CompletionItem {
                 label: b.name.clone(),
                 kind: Some(CompletionItemKind::FUNCTION),
                 detail: Some(detail),
-                documentation: Some(Documentation::MarkupContent(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: md_parts.join("\n\n"),
-                })),
+                documentation: None,
+                data,
                 ..Default::default()
             }
         })
@@ -541,6 +591,7 @@ fn local_variable_completions(
 fn local_function_completions(
     tree: &tree_sitter::Tree,
     source: &str,
+    uri: &str,
 ) -> Vec<CompletionItem> {
     let defs = extract::extract_definitions(tree, source);
     defs.into_iter()
@@ -549,34 +600,18 @@ fn local_function_completions(
             let sig = d.format_signature();
             let detail = format!("(local) {sig}");
 
-            let mut md_parts = vec![format!("```br\n{sig}\n```")];
-            if let Some(doc) = &d.documentation {
-                md_parts.push(doc.clone());
-            }
-            let param_docs: Vec<String> = d
-                .params
-                .iter()
-                .filter_map(|p| {
-                    p.documentation.as_ref().map(|doc| {
-                        format!("*@param* `{}` \u{2014} {doc}", p.format_label())
-                    })
-                })
-                .collect();
-            if !param_docs.is_empty() {
-                md_parts.push(param_docs.join("\n\n"));
-            }
-            if let Some(ret) = &d.return_documentation {
-                md_parts.push(format!("*@returns* \u{2014} {ret}"));
-            }
+            let data = serde_json::to_value(CompletionData::Local {
+                name: d.name.clone(),
+                uri: uri.to_string(),
+            })
+            .ok();
 
             CompletionItem {
                 label: d.name,
                 kind: Some(CompletionItemKind::FUNCTION),
                 detail: Some(detail),
-                documentation: Some(Documentation::MarkupContent(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: md_parts.join("\n\n"),
-                })),
+                documentation: None,
+                data,
                 ..Default::default()
             }
         })
@@ -592,9 +627,8 @@ fn library_function_completions(
     index: &WorkspaceIndex,
 ) -> Vec<CompletionItem> {
     index
-        .all_symbols()
+        .unique_functions(current_uri)
         .into_iter()
-        .filter(|s| s.uri.as_str() != current_uri && !s.def.is_import_only)
         .map(|s| {
             let sig = s.def.format_signature();
             let detail = format!("(library) {sig}");
@@ -606,26 +640,10 @@ fn library_function_completions(
                 .and_then(|mut segs| segs.next_back().map(|s| s.to_string()))
                 .unwrap_or_default();
 
-            let mut md_parts = vec![format!("```br\n{sig}\n```")];
-            if let Some(doc) = &s.def.documentation {
-                md_parts.push(doc.clone());
-            }
-            let param_docs: Vec<String> = s
-                .def
-                .params
-                .iter()
-                .filter_map(|p| {
-                    p.documentation.as_ref().map(|doc| {
-                        format!("*@param* `{}` \u{2014} {doc}", p.format_label())
-                    })
-                })
-                .collect();
-            if !param_docs.is_empty() {
-                md_parts.push(param_docs.join("\n\n"));
-            }
-            if let Some(ret) = &s.def.return_documentation {
-                md_parts.push(format!("*@returns* \u{2014} {ret}"));
-            }
+            let data = serde_json::to_value(CompletionData::Workspace {
+                name: s.def.name.clone(),
+            })
+            .ok();
 
             CompletionItem {
                 label: s.def.name.clone(),
@@ -635,10 +653,8 @@ fn library_function_completions(
                     description: Some(filename),
                     detail: None,
                 }),
-                documentation: Some(Documentation::MarkupContent(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: md_parts.join("\n\n"),
-                })),
+                documentation: None,
+                data,
                 ..Default::default()
             }
         })
@@ -736,7 +752,7 @@ mod tests {
         let source = "def fnAdd(A, B) = A + B\ndef library fnCalc$(X$)\nfnend\n";
         let mut p = parser::new_parser();
         let tree = parser::parse(&mut p, source, None).unwrap();
-        let items = local_function_completions(&tree, source);
+        let items = local_function_completions(&tree, source, "file:///test.brs");
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|i| i.kind == Some(CompletionItemKind::FUNCTION)));
         assert!(items.iter().any(|i| i.label == "fnAdd"));
@@ -748,7 +764,7 @@ mod tests {
         let source = "def fnAdd(A, B) = A + B\n";
         let mut p = parser::new_parser();
         let tree = parser::parse(&mut p, source, None).unwrap();
-        let items = local_function_completions(&tree, source);
+        let items = local_function_completions(&tree, source, "file:///test.brs");
         let item = &items[0];
         assert_eq!(item.detail.as_deref(), Some("(local) fnAdd(A, B)"));
     }
@@ -830,6 +846,83 @@ mod tests {
         let items = get_completions(&doc, "file:///test.brs", pos, &index);
         // Should have statements + keywords + builtins + local vars + local fns
         assert!(items.len() > 100);
+    }
+
+    #[test]
+    fn builtin_completions_no_docs() {
+        let items = builtin_function_completions();
+        assert!(
+            items.iter().all(|i| i.documentation.is_none()),
+            "builtin completions should defer docs to resolve"
+        );
+    }
+
+    #[test]
+    fn builtin_completions_have_data() {
+        let items = builtin_function_completions();
+        let val = items.iter().find(|i| i.label == "Val").unwrap();
+        let data: CompletionData =
+            serde_json::from_value(val.data.clone().unwrap()).unwrap();
+        assert!(matches!(data, CompletionData::Builtin { ref name, .. } if name == "Val"));
+    }
+
+    #[test]
+    fn local_function_no_docs() {
+        let source = "def fnAdd(A, B) = A + B\n";
+        let mut p = parser::new_parser();
+        let tree = parser::parse(&mut p, source, None).unwrap();
+        let items = local_function_completions(&tree, source, "file:///test.brs");
+        assert!(
+            items.iter().all(|i| i.documentation.is_none()),
+            "local function completions should defer docs to resolve"
+        );
+    }
+
+    #[test]
+    fn library_dedup_by_name() {
+        let mut index = WorkspaceIndex::new();
+        let uri_a = Url::parse("file:///workspace/a.brs").unwrap();
+        let uri_b = Url::parse("file:///workspace/b.brs").unwrap();
+        let current = "file:///workspace/main.brs";
+        index.add_file(&uri_a, vec![make_test_def("fnFoo", false, false)]);
+        index.add_file(&uri_b, vec![make_test_def("fnFoo", false, false)]);
+
+        let items = library_function_completions(current, &index);
+        let foo_count = items.iter().filter(|i| i.label == "fnFoo").count();
+        assert_eq!(foo_count, 1, "duplicate function names should be deduped");
+    }
+
+    #[test]
+    fn library_dedup_prefers_library() {
+        let mut index = WorkspaceIndex::new();
+        let uri_a = Url::parse("file:///workspace/a.brs").unwrap();
+        let uri_b = Url::parse("file:///workspace/b.brs").unwrap();
+        let current = "file:///workspace/main.brs";
+        index.add_file(&uri_a, vec![make_test_def("fnFoo", false, false)]);
+        index.add_file(&uri_b, vec![make_test_def("fnFoo", true, false)]);
+
+        let items = library_function_completions(current, &index);
+        assert_eq!(items.len(), 1);
+        let ld = items[0].label_details.as_ref().unwrap();
+        assert_eq!(
+            ld.description.as_deref(),
+            Some("b.brs"),
+            "should pick the is_library entry from b.brs"
+        );
+    }
+
+    #[test]
+    fn library_completions_no_docs() {
+        let mut index = WorkspaceIndex::new();
+        let uri = Url::parse("file:///workspace/utils.brs").unwrap();
+        let current = "file:///workspace/main.brs";
+        index.add_file(&uri, vec![make_test_def("fnUtil", false, false)]);
+
+        let items = library_function_completions(current, &index);
+        assert!(
+            items.iter().all(|i| i.documentation.is_none()),
+            "library completions should defer docs to resolve"
+        );
     }
 
     fn make_test_def(

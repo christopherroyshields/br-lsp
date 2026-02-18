@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, DiagnosticTag, NumberOrString};
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::workspace::WorkspaceIndex;
@@ -556,6 +556,114 @@ fn check_parameter_count(tree: &Tree, source: &str) -> Vec<Diagnostic> {
     diagnostics
 }
 
+pub fn check_unused_variables(tree: &Tree, source: &str) -> Vec<Diagnostic> {
+    let mut diagnostics = check_unused_dim_variables(tree, source);
+    diagnostics.extend(check_unused_library_imports(tree, source));
+    diagnostics
+}
+
+fn check_unused_dim_variables(tree: &Tree, source: &str) -> Vec<Diagnostic> {
+    let root = tree.root_node();
+
+    // Query dim'd variable names
+    let dim_results = parser::run_query(
+        "(dim_statement (stringreference name: (_) @name))
+         (dim_statement (numberreference name: (_) @name))
+         (dim_statement (stringarray name: (_) @name))
+         (dim_statement (numberarray name: (_) @name))",
+        root,
+        source,
+    );
+    if dim_results.is_empty() {
+        return Vec::new();
+    }
+
+    // Query ALL variable references
+    let all_results = parser::run_query(
+        "(stringreference name: (_) @name)
+         (numberreference name: (_) @name)
+         (stringarray name: (_) @name)
+         (numberarray name: (_) @name)",
+        root,
+        source,
+    );
+
+    // Count total references per lowercase name
+    let mut total_counts: HashMap<String, usize> = HashMap::new();
+    for r in &all_results {
+        *total_counts
+            .entry(r.text.to_ascii_lowercase())
+            .or_default() += 1;
+    }
+
+    // Group dim entries by lowercase name
+    let mut dim_entries: HashMap<String, Vec<(&str, tower_lsp::lsp_types::Range)>> =
+        HashMap::new();
+    for r in &dim_results {
+        dim_entries
+            .entry(r.text.to_ascii_lowercase())
+            .or_default()
+            .push((&r.text, r.range));
+    }
+
+    let mut diagnostics = Vec::new();
+    for (key, entries) in &dim_entries {
+        let dim_count = entries.len();
+        let total = total_counts.get(key).copied().unwrap_or(0);
+        if total == dim_count {
+            for (name, range) in entries {
+                diagnostics.push(Diagnostic {
+                    range: *range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    message: format!("'{name}' is declared but never used"),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    diagnostics
+}
+
+fn check_unused_library_imports(tree: &Tree, source: &str) -> Vec<Diagnostic> {
+    let defs = extract::extract_definitions(tree, source);
+    let imports: Vec<&extract::FunctionDef> = defs.iter().filter(|d| d.is_import_only).collect();
+
+    if imports.is_empty() {
+        return Vec::new();
+    }
+
+    // Query all function_name nodes in the file
+    let all_fn_names =
+        parser::run_query("(function_name) @name", tree.root_node(), source);
+
+    // Count per lowercase name
+    let mut fn_counts: HashMap<String, usize> = HashMap::new();
+    for r in &all_fn_names {
+        *fn_counts
+            .entry(r.text.to_ascii_lowercase())
+            .or_default() += 1;
+    }
+
+    let mut diagnostics = Vec::new();
+    for import in &imports {
+        let key = import.name.to_ascii_lowercase();
+        let count = fn_counts.get(&key).copied().unwrap_or(0);
+        if count <= 1 {
+            diagnostics.push(Diagnostic {
+                range: import.selection_range,
+                severity: Some(DiagnosticSeverity::HINT),
+                tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                message: format!("'{}' is imported but never used", import.name),
+                ..Default::default()
+            });
+        }
+    }
+
+    diagnostics
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1003,5 +1111,134 @@ mod tests {
         let index = WorkspaceIndex::new();
         let diags = check_undefined_functions(&tree, source, &index);
         assert!(diags.is_empty(), "system functions should not be checked");
+    }
+
+    // --- Unused variable tests ---
+
+    #[test]
+    fn unused_dim_variable_flagged() {
+        let source = "dim A$(10)*30\n";
+        let tree = parse(source);
+        let diags = check_unused_dim_variables(&tree, source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("declared but never used"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::HINT));
+        assert_eq!(diags[0].tags, Some(vec![DiagnosticTag::UNNECESSARY]));
+    }
+
+    #[test]
+    fn used_dim_variable_not_flagged() {
+        let source = "dim A$(10)*30\nlet A$(1)=\"hello\"\n";
+        let tree = parse(source);
+        let diags = check_unused_dim_variables(&tree, source);
+        assert!(diags.is_empty(), "used dim variable should not be flagged");
+    }
+
+    #[test]
+    fn unused_dim_numeric_variable() {
+        let source = "dim X(5)\n";
+        let tree = parse(source);
+        let diags = check_unused_dim_variables(&tree, source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("declared but never used"));
+    }
+
+    #[test]
+    fn used_dim_numeric_variable() {
+        let source = "dim X(5)\nlet X(1)=42\n";
+        let tree = parse(source);
+        let diags = check_unused_dim_variables(&tree, source);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn unused_dim_case_insensitive() {
+        let source = "dim MyVar$(3)*10\nlet MYVAR$(1)=\"test\"\n";
+        let tree = parse(source);
+        let diags = check_unused_dim_variables(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "case-insensitive match should count as used"
+        );
+    }
+
+    #[test]
+    fn multiple_dim_one_unused() {
+        let source = "dim A$(10)*30\ndim B$(5)*20\nlet A$(1)=\"hi\"\n";
+        let tree = parse(source);
+        let diags = check_unused_dim_variables(&tree, source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("B$"));
+    }
+
+    #[test]
+    fn no_dim_no_diagnostic() {
+        let source = "let X=1\nprint X\n";
+        let tree = parse(source);
+        let diags = check_unused_dim_variables(&tree, source);
+        assert!(diags.is_empty());
+    }
+
+    // --- Unused library import tests ---
+
+    #[test]
+    fn unused_library_import_flagged() {
+        let source = "library \"utils.dll\": fnCalc\n";
+        let tree = parse(source);
+        let diags = check_unused_library_imports(&tree, source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fnCalc"));
+        assert!(diags[0].message.contains("imported but never used"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::HINT));
+        assert_eq!(diags[0].tags, Some(vec![DiagnosticTag::UNNECESSARY]));
+    }
+
+    #[test]
+    fn used_library_import_not_flagged() {
+        let source = "library \"utils.dll\": fnCalc\nlet X=fnCalc(1)\n";
+        let tree = parse(source);
+        let diags = check_unused_library_imports(&tree, source);
+        assert!(diags.is_empty(), "used import should not be flagged");
+    }
+
+    #[test]
+    fn mixed_library_imports() {
+        let source = "library \"utils.dll\": fnCalc, fnOther\nlet X=fnCalc(1)\n";
+        let tree = parse(source);
+        let diags = check_unused_library_imports(&tree, source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fnOther"));
+    }
+
+    #[test]
+    fn library_import_case_insensitive() {
+        let source = "library \"utils.dll\": fnCalc\nlet X=FNCALC(1)\n";
+        let tree = parse(source);
+        let diags = check_unused_library_imports(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "case-insensitive match should count as used"
+        );
+    }
+
+    #[test]
+    fn no_library_imports_no_diagnostic() {
+        let source = "let X=1\n";
+        let tree = parse(source);
+        let diags = check_unused_library_imports(&tree, source);
+        assert!(diags.is_empty());
+    }
+
+    // --- Combined check_unused_variables tests ---
+
+    #[test]
+    fn check_unused_variables_combined() {
+        let source =
+            "dim A$(10)*30\nlibrary \"utils.dll\": fnCalc\nlet X=fnCalc(1)\n";
+        let tree = parse(source);
+        let diags = check_unused_variables(&tree, source);
+        // A$ is unused dim, fnCalc is used
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("A$"));
     }
 }

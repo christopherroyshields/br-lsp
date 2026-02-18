@@ -52,6 +52,13 @@
         ]
       }
     ],
+    "grammars": [
+      {
+        "language": "br",
+        "scopeName": "source.br",
+        "path": "./syntaxes/br.tmLanguage.json"
+      }
+    ],
     "commands": [
       {
         "command": "br-lsp.scanAll",

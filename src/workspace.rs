@@ -58,6 +58,32 @@ impl WorkspaceIndex {
     pub fn all_symbols(&self) -> Vec<&IndexedFunctionDef> {
         self.definitions.values().flatten().collect()
     }
+
+    /// Returns one representative `IndexedFunctionDef` per unique function name,
+    /// excluding entries from `exclude_uri` and import-only entries.
+    /// Prefers entries with `is_library: true` when available.
+    pub fn unique_functions(&self, exclude_uri: &str) -> Vec<&IndexedFunctionDef> {
+        self.definitions
+            .values()
+            .filter_map(|entries| {
+                let candidates: Vec<&IndexedFunctionDef> = entries
+                    .iter()
+                    .filter(|e| e.uri.as_str() != exclude_uri && !e.def.is_import_only)
+                    .collect();
+
+                if candidates.is_empty() {
+                    return None;
+                }
+
+                // Prefer is_library entry, otherwise take the first
+                let pick = candidates
+                    .iter()
+                    .find(|e| e.def.is_library)
+                    .unwrap_or(&candidates[0]);
+                Some(*pick)
+            })
+            .collect()
+    }
 }
 
 /// Read a BR source file from disk, decoding from CP437 to UTF-8.
@@ -259,6 +285,67 @@ mod tests {
         assert!(is_br_file(Path::new("foo.WBS")));
         assert!(!is_br_file(Path::new("foo.rs")));
         assert!(!is_br_file(Path::new("foo")));
+    }
+
+    fn make_def_full(name: &str, is_library: bool, is_import_only: bool) -> FunctionDef {
+        FunctionDef {
+            name: name.to_string(),
+            range: Range::default(),
+            selection_range: Range::default(),
+            is_library,
+            is_import_only,
+            params: vec![],
+            has_param_substitution: false,
+            documentation: None,
+            return_documentation: None,
+        }
+    }
+
+    #[test]
+    fn unique_functions_dedup() {
+        let mut index = WorkspaceIndex::new();
+        let uri1 = test_url("a.brs");
+        let uri2 = test_url("b.brs");
+        index.add_file(&uri1, vec![make_def("fnFoo", false)]);
+        index.add_file(&uri2, vec![make_def("fnFoo", false)]);
+
+        let results = index.unique_functions("file:///workspace/main.brs");
+        let foo_count = results.iter().filter(|r| r.def.name == "fnFoo").count();
+        assert_eq!(foo_count, 1, "same-name function from 2 files should produce 1 result");
+    }
+
+    #[test]
+    fn unique_functions_prefers_library() {
+        let mut index = WorkspaceIndex::new();
+        let uri1 = test_url("a.brs");
+        let uri2 = test_url("b.brs");
+        index.add_file(&uri1, vec![make_def("fnFoo", false)]);
+        index.add_file(&uri2, vec![make_def("fnFoo", true)]);
+
+        let results = index.unique_functions("file:///workspace/main.brs");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].def.is_library, "should prefer is_library entry");
+        assert_eq!(results[0].uri, uri2);
+    }
+
+    #[test]
+    fn unique_functions_excludes_current_uri() {
+        let mut index = WorkspaceIndex::new();
+        let uri = test_url("main.brs");
+        index.add_file(&uri, vec![make_def("fnLocal", false)]);
+
+        let results = index.unique_functions("file:///workspace/main.brs");
+        assert!(results.is_empty(), "should exclude entries from current URI");
+    }
+
+    #[test]
+    fn unique_functions_excludes_import_only() {
+        let mut index = WorkspaceIndex::new();
+        let uri = test_url("lib.brs");
+        index.add_file(&uri, vec![make_def_full("fnImport", false, true)]);
+
+        let results = index.unique_functions("file:///workspace/main.brs");
+        assert!(results.is_empty(), "should exclude import-only entries");
     }
 
     #[test]
