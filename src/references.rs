@@ -15,7 +15,12 @@ const SUPPORTED_KINDS: &[&str] = &[
 
 /// If the node at (line, character) is a `function_name`, return its text.
 /// Uses the same end-of-token fallback as `find_references`.
-pub fn resolve_function_name_at(tree: &Tree, source: &str, line: usize, character: usize) -> Option<String> {
+pub fn resolve_function_name_at(
+    tree: &Tree,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<String> {
     let mut node = node_at_position(tree, line, character)?;
 
     if !SUPPORTED_KINDS.contains(&node.kind()) && character > 0 {
@@ -75,7 +80,11 @@ pub(crate) fn escape_for_query(name: &str) -> String {
     result
 }
 
-pub(crate) fn find_function_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Range> {
+pub(crate) fn find_function_refs(
+    node: &tree_sitter::Node,
+    tree: &Tree,
+    source: &str,
+) -> Vec<Range> {
     let name = node.utf8_text(source.as_bytes()).unwrap_or("");
     find_function_refs_by_name(name, tree, source)
 }
@@ -137,7 +146,11 @@ fn find_line_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Ra
         .collect()
 }
 
-pub(crate) fn find_variable_refs(node: &tree_sitter::Node, tree: &Tree, source: &str) -> Vec<Range> {
+pub(crate) fn find_variable_refs(
+    node: &tree_sitter::Node,
+    tree: &Tree,
+    source: &str,
+) -> Vec<Range> {
     let name = node.utf8_text(source.as_bytes()).unwrap_or("");
     let parent = match node.parent() {
         Some(p) => p,
@@ -150,12 +163,12 @@ pub(crate) fn find_variable_refs(node: &tree_sitter::Node, tree: &Tree, source: 
     filter_by_scope(node, tree, source, results)
 }
 
-struct FunctionRange {
-    def_start_byte: usize,
-    body_end_byte: usize,
+pub(crate) struct FunctionRange {
+    pub(crate) def_start_byte: usize,
+    pub(crate) body_end_byte: usize,
 }
 
-fn get_function_ranges(tree: &Tree, source: &str) -> Vec<FunctionRange> {
+pub(crate) fn get_function_ranges(tree: &Tree, source: &str) -> Vec<FunctionRange> {
     let query = "(line (def_statement) @def)\n(fnend_statement) @fnend";
     let results = run_query(query, tree.root_node(), source);
 
@@ -259,7 +272,51 @@ fn has_matching_identifier(
     found
 }
 
-fn in_function(byte_offset: usize, ranges: &[FunctionRange]) -> Option<usize> {
+pub(crate) fn find_matching_identifier_range(
+    param_node: &tree_sitter::Node,
+    parent_type: &str,
+    name: &str,
+    source: &str,
+) -> Option<Range> {
+    let mut cursor = param_node.walk();
+
+    'outer: loop {
+        let n = cursor.node();
+        if (n.kind() == "stringidentifier" || n.kind() == "numberidentifier")
+            && n.parent().map(|p| p.kind()) == Some(parent_type)
+        {
+            let node_text = n.utf8_text(source.as_bytes()).unwrap_or("");
+            if node_text.eq_ignore_ascii_case(name) {
+                let start = n.start_position();
+                let end = n.end_position();
+                return Some(Range {
+                    start: tower_lsp::lsp_types::Position {
+                        line: start.row as u32,
+                        character: start.column as u32,
+                    },
+                    end: tower_lsp::lsp_types::Position {
+                        line: end.row as u32,
+                        character: end.column as u32,
+                    },
+                });
+            }
+        }
+
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                continue 'outer;
+            }
+            if !cursor.goto_parent() {
+                return None;
+            }
+        }
+    }
+}
+
+pub(crate) fn in_function(byte_offset: usize, ranges: &[FunctionRange]) -> Option<usize> {
     ranges
         .iter()
         .position(|r| byte_offset >= r.def_start_byte && byte_offset <= r.body_end_byte)

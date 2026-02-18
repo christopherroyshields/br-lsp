@@ -2,7 +2,9 @@ use tower_lsp::lsp_types::Range;
 use tree_sitter::Tree;
 
 use crate::parser::{node_at_position, run_query};
-use crate::references::escape_for_query;
+use crate::references::{
+    escape_for_query, find_matching_identifier_range, get_function_ranges, in_function,
+};
 
 const SUPPORTED_KINDS: &[&str] = &[
     "function_name",
@@ -61,7 +63,12 @@ pub fn find_definition(
         }
         "stringidentifier" | "numberidentifier" => {
             let name = node.utf8_text(source.as_bytes()).unwrap_or("");
-            find_dim_def(tree, source, name)
+            let result = find_param_def(node, tree, source);
+            if matches!(result, DefinitionResult::None) {
+                find_dim_def(tree, source, name)
+            } else {
+                result
+            }
         }
         _ => DefinitionResult::None,
     }
@@ -115,6 +122,43 @@ fn find_line_def(tree: &Tree, source: &str, text: &str) -> DefinitionResult {
             .unwrap_or(false)
         {
             return DefinitionResult::Found(r.range);
+        }
+    }
+    DefinitionResult::None
+}
+
+fn find_param_def(node: tree_sitter::Node, tree: &Tree, source: &str) -> DefinitionResult {
+    let name = node.utf8_text(source.as_bytes()).unwrap_or("");
+    let parent_type = match node.parent() {
+        Some(p) => p.kind().to_string(),
+        None => return DefinitionResult::None,
+    };
+
+    let ranges = get_function_ranges(tree, source);
+    let fn_idx = match in_function(node.start_byte(), &ranges) {
+        Some(idx) => idx,
+        None => return DefinitionResult::None,
+    };
+    let fr = &ranges[fn_idx];
+
+    let query = "(parameter) @param";
+    let results = run_query(query, tree.root_node(), source);
+
+    for r in &results {
+        if r.start_byte < fr.def_start_byte || r.start_byte > fr.body_end_byte {
+            continue;
+        }
+        let param_node = match node_at_position(
+            tree,
+            r.range.start.line as usize,
+            r.range.start.character as usize,
+        ) {
+            Some(n) => n,
+            None => continue,
+        };
+        if let Some(range) = find_matching_identifier_range(&param_node, &parent_type, name, source)
+        {
+            return DefinitionResult::Found(range);
         }
     }
     DefinitionResult::None
@@ -244,6 +288,67 @@ mod tests {
         match parse_and_find(source, 0, 8) {
             DefinitionResult::None => {}
             _ => panic!("Expected None"),
+        }
+    }
+
+    #[test]
+    fn param_def_from_body() {
+        let source = "\
+def fnFoo(X)
+let Y = X + 1
+fnend
+";
+        // Cursor on X in the function body (line 1)
+        let col = source.lines().nth(1).unwrap().find('X').unwrap();
+        match parse_and_find(source, 1, col) {
+            DefinitionResult::Found(range) => {
+                // Should point to X in the parameter list (line 0)
+                assert_eq!(range.start.line, 0);
+                assert_eq!(
+                    range.start.character,
+                    source.lines().next().unwrap().find('X').unwrap() as u32
+                );
+            }
+            _ => panic!("Expected Found for param definition"),
+        }
+    }
+
+    #[test]
+    fn param_def_string_variable() {
+        let source = "\
+def fnBar$(Y$)
+let Z$ = Y$
+fnend
+";
+        // Cursor on Y$ in the function body (line 1)
+        let line1 = source.lines().nth(1).unwrap();
+        let col = line1.find("Y$").unwrap();
+        match parse_and_find(source, 1, col) {
+            DefinitionResult::Found(range) => {
+                assert_eq!(range.start.line, 0);
+                assert_eq!(
+                    range.start.character,
+                    source.lines().next().unwrap().find("Y$").unwrap() as u32
+                );
+            }
+            _ => panic!("Expected Found for string param definition"),
+        }
+    }
+
+    #[test]
+    fn non_param_variable_not_affected() {
+        let source = "\
+let X = 1
+def fnFoo(X)
+let Y = X + 1
+fnend
+let Z = X + 2
+";
+        // Cursor on X outside the function (line 4)
+        let col = source.lines().nth(4).unwrap().find('X').unwrap();
+        match parse_and_find(source, 4, col) {
+            DefinitionResult::None => {}
+            _ => panic!("Expected None for non-param variable outside function"),
         }
     }
 }
