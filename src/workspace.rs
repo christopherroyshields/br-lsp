@@ -55,6 +55,30 @@ impl WorkspaceIndex {
             .unwrap_or(&[])
     }
 
+    /// Returns all definitions for `name`, sorted by priority relative to `current_uri`:
+    /// 0. Local (same URI), non-import-only
+    /// 1. Library, non-import-only
+    /// 2. Any non-import-only
+    /// 3. Import-only
+    pub fn lookup_prioritized(&self, name: &str, current_uri: &str) -> Vec<&IndexedFunctionDef> {
+        let mut defs: Vec<&IndexedFunctionDef> = self.lookup(name).iter().collect();
+        defs.sort_by_key(|d| {
+            let is_local = d.uri.as_str() == current_uri;
+            match (is_local, d.def.is_import_only, d.def.is_library) {
+                (true, false, _) => 0,
+                (_, false, true) => 1,
+                (_, false, false) => 2,
+                (_, true, _) => 3,
+            }
+        });
+        defs
+    }
+
+    /// Returns the highest-priority definition for `name` relative to `current_uri`.
+    pub fn lookup_best(&self, name: &str, current_uri: &str) -> Option<&IndexedFunctionDef> {
+        self.lookup_prioritized(name, current_uri).into_iter().next()
+    }
+
     pub fn all_symbols(&self) -> Vec<&IndexedFunctionDef> {
         self.definitions.values().flatten().collect()
     }
@@ -386,5 +410,64 @@ mod tests {
         assert_eq!(results[0].def.params[1].kind, ParamKind::String);
         assert!(results[0].def.params[1].is_optional);
         assert!(results[0].def.params[1].is_reference);
+    }
+
+    #[test]
+    fn lookup_prioritized_local_first() {
+        let mut index = WorkspaceIndex::new();
+        let local_uri = test_url("local.brs");
+        let other_uri = test_url("other.brs");
+        index.add_file(&local_uri, vec![make_def("fnFoo", false)]);
+        index.add_file(&other_uri, vec![make_def("fnFoo", true)]);
+
+        let results = index.lookup_prioritized("fnFoo", local_uri.as_str());
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].uri, local_uri, "local def should come first");
+    }
+
+    #[test]
+    fn lookup_prioritized_library_before_non_library() {
+        let mut index = WorkspaceIndex::new();
+        let uri_a = test_url("a.brs");
+        let uri_b = test_url("b.brs");
+        index.add_file(&uri_a, vec![make_def("fnFoo", false)]);
+        index.add_file(&uri_b, vec![make_def("fnFoo", true)]);
+
+        // Neither is local
+        let results = index.lookup_prioritized("fnFoo", "file:///workspace/other.brs");
+        assert_eq!(results.len(), 2);
+        assert!(results[0].def.is_library, "library def should come before non-library");
+    }
+
+    #[test]
+    fn lookup_prioritized_import_only_last() {
+        let mut index = WorkspaceIndex::new();
+        let uri_a = test_url("a.brs");
+        let uri_b = test_url("b.brs");
+        index.add_file(&uri_a, vec![make_def_full("fnFoo", false, true)]);
+        index.add_file(&uri_b, vec![make_def("fnFoo", false)]);
+
+        let results = index.lookup_prioritized("fnFoo", "file:///workspace/other.brs");
+        assert_eq!(results.len(), 2);
+        assert!(!results[0].def.is_import_only, "non-import should come first");
+        assert!(results[1].def.is_import_only, "import-only should come last");
+    }
+
+    #[test]
+    fn lookup_best_returns_local() {
+        let mut index = WorkspaceIndex::new();
+        let local_uri = test_url("local.brs");
+        let other_uri = test_url("other.brs");
+        index.add_file(&other_uri, vec![make_def("fnFoo", true)]);
+        index.add_file(&local_uri, vec![make_def("fnFoo", false)]);
+
+        let best = index.lookup_best("fnFoo", local_uri.as_str()).unwrap();
+        assert_eq!(best.uri, local_uri, "lookup_best should return local def");
+    }
+
+    #[test]
+    fn lookup_best_empty() {
+        let index = WorkspaceIndex::new();
+        assert!(index.lookup_best("fnNonexistent", "file:///x.brs").is_none());
     }
 }

@@ -870,11 +870,8 @@ impl LanguageServer for Backend {
             }
             completions::CompletionData::Workspace { ref name } => {
                 let index = self.workspace_index.read().await;
-                let entries = index.lookup(name);
-                entries
-                    .iter()
-                    .find(|e| !e.def.is_import_only)
-                    .or_else(|| entries.first())
+                index
+                    .lookup_best(name, "")
                     .map(|e| completions::format_function_docs(&e.def))
             }
         };
@@ -1180,11 +1177,7 @@ impl LanguageServer for Backend {
             }
             Some(definition::DefinitionResult::LookupFunction(name)) => {
                 let index = self.workspace_index.read().await;
-                let defs = index.lookup(&name);
-                let def = defs
-                    .iter()
-                    .find(|d| !d.def.is_import_only)
-                    .or_else(|| defs.first());
+                let def = index.lookup_best(&name, &uri_string);
                 if let Some(def) = def {
                     self.client
                         .log_message(
@@ -1332,16 +1325,11 @@ impl LanguageServer for Backend {
             _ => {
                 // User function — look up in workspace index
                 let index = self.workspace_index.read().await;
-                let defs = index.lookup(fn_name);
-                // Prefer actual def statements over library import entries
-                let def = defs
-                    .iter()
-                    .find(|d| !d.def.is_import_only)
-                    .or_else(|| defs.first());
-                match def {
-                    Some(d) => format_user_hover(&d.def),
-                    None => return Ok(None),
+                let defs = index.lookup_prioritized(fn_name, &uri_string);
+                if defs.is_empty() {
+                    return Ok(None);
                 }
+                format_user_hover_multi(&defs)
             }
         };
 
@@ -1434,11 +1422,10 @@ impl LanguageServer for Backend {
                 build_builtin_signatures(builtins, call_ctx.active_param)
             } else {
                 let index = self.workspace_index.read().await;
-                let defs = index.lookup(&call_ctx.name);
-                if defs.is_empty() {
-                    return Ok(None);
+                match index.lookup_best(&call_ctx.name, &uri_string) {
+                    Some(d) => build_user_signatures(&d.def, call_ctx.active_param),
+                    None => return Ok(None),
                 }
-                build_user_signatures(&defs[0].def, call_ctx.active_param)
             }
         };
 
@@ -1765,6 +1752,46 @@ fn format_builtin_hover(builtins: &[builtins::BuiltinFunction]) -> String {
         parts.push(md);
     }
     parts.join("\n\n---\n\n")
+}
+
+fn format_user_hover_multi(defs: &[&workspace::IndexedFunctionDef]) -> String {
+    // Filter out import-only, deduplicate by signature string
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<&&workspace::IndexedFunctionDef> = defs
+        .iter()
+        .filter(|d| !d.def.is_import_only)
+        .filter(|d| seen.insert(d.def.format_signature()))
+        .collect();
+
+    match unique.len() {
+        0 => {
+            // All entries are import-only; show the first one
+            match defs.first() {
+                Some(d) => format_user_hover(&d.def),
+                None => String::new(),
+            }
+        }
+        1 => format_user_hover(&unique[0].def),
+        _ => unique
+            .iter()
+            .map(|d| {
+                let mut md = format_user_hover(&d.def);
+                let filename = uri_filename(&d.uri);
+                md.push_str(&format!("\n\n*from* `{filename}`"));
+                md
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n&nbsp;\n\n"),
+    }
+}
+
+/// Extract the filename from a URI (e.g. "file:///path/to/foo.brs" → "foo.brs").
+fn uri_filename(uri: &Url) -> String {
+    uri.path()
+        .rsplit('/')
+        .next()
+        .unwrap_or(uri.as_str())
+        .to_string()
 }
 
 fn format_user_hover(def: &extract::FunctionDef) -> String {

@@ -575,4 +575,40 @@ def fnAdd(A, B) = A + B
         assert_eq!(&label[offsets[0][0] as usize..offsets[0][1] as usize], "A");
         assert_eq!(&label[offsets[1][0] as usize..offsets[1][1] as usize], "B");
     }
+
+    #[test]
+    fn semicolon_ampersand_params() {
+        // Test the `;& pattern (semicolon immediately followed by ampersand)
+        let defs =
+            parse_and_extract("def fnPause(Howlong;&thekey$,&function,___,looping)\nfnend\n");
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "fnPause");
+
+        let params = &defs[0].params;
+        assert_eq!(params.len(), 5);
+
+        assert_eq!(params[0].name, "Howlong");
+        assert_eq!(params[0].kind, ParamKind::Numeric);
+        assert!(!params[0].is_optional);
+        assert!(!params[0].is_reference);
+
+        assert_eq!(params[1].name, "thekey$");
+        assert_eq!(params[1].kind, ParamKind::String);
+        assert!(params[1].is_optional);
+        assert!(params[1].is_reference);
+
+        assert_eq!(params[2].name, "function");
+        assert_eq!(params[2].kind, ParamKind::Numeric);
+        assert!(params[2].is_optional);
+        assert!(params[2].is_reference);
+
+        // visible_params truncates at ___
+        let visible = defs[0].visible_params();
+        assert_eq!(visible.len(), 3);
+
+        assert_eq!(
+            defs[0].format_signature(),
+            "fnPause(Howlong, [&thekey$], [&function])"
+        );
+    }
 }
