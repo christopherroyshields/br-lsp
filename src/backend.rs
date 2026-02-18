@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dashmap::DashMap;
@@ -11,6 +11,8 @@ use tower_lsp::lsp_types::{notification, request, *};
 use tower_lsp::{Client, LanguageServer};
 use tree_sitter::{InputEdit, Point, Tree};
 use walkdir::WalkDir;
+
+const DIAGNOSTICS_DEBOUNCE_MS: u64 = 150;
 
 use crate::builtins;
 use crate::check;
@@ -39,6 +41,7 @@ pub struct Backend {
     pub workspace_index: Arc<tokio::sync::RwLock<WorkspaceIndex>>,
     pub workspace_folders: Arc<tokio::sync::RwLock<Vec<Url>>>,
     pub indexing_complete: Arc<AtomicBool>,
+    pub diagnostics_generation: Arc<DashMap<String, Arc<AtomicU64>>>,
 }
 
 struct TextDocumentItem {
@@ -154,6 +157,60 @@ impl Backend {
                 ),
             )
             .await;
+    }
+
+    fn schedule_diagnostics(&self, uri: Url, uri_string: String) {
+        let generation = self
+            .diagnostics_generation
+            .entry(uri_string.clone())
+            .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+            .clone();
+        let my_gen = generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+        let client = self.client.clone();
+        let document_map = self.document_map.clone();
+        let workspace_index = self.workspace_index.clone();
+        let indexing_complete = self.indexing_complete.clone();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(DIAGNOSTICS_DEBOUNCE_MS)).await;
+
+            if generation.load(Ordering::SeqCst) != my_gen {
+                return; // stale — a newer change superseded us
+            }
+
+            let (source, tree) = {
+                let doc = match document_map.get(&uri_string) {
+                    Some(d) => d,
+                    None => return, // document was closed
+                };
+                (doc.source.clone(), doc.tree.clone())
+            };
+
+            let tree = match tree {
+                Some(t) => t,
+                None => return,
+            };
+
+            let mut diagnostics = parser::collect_diagnostics(&tree, &source);
+            diagnostics.extend(diagnostics::collect_function_diagnostics(&tree, &source));
+            diagnostics.extend(diagnostics::check_unused_variables(&tree, &source));
+
+            let defs = extract::extract_definitions(&tree, &source);
+            {
+                let mut index = workspace_index.write().await;
+                index.update_file(&uri, defs);
+            }
+
+            if indexing_complete.load(Ordering::Acquire) {
+                let index = workspace_index.read().await;
+                diagnostics.extend(diagnostics::check_undefined_functions(
+                    &tree, &source, &index,
+                ));
+            }
+
+            client.publish_diagnostics(uri, diagnostics, None).await;
+        });
     }
 
     fn scan_workspace_folder(
@@ -595,50 +652,13 @@ impl LanguageServer for Backend {
         };
         let parse_elapsed = start.elapsed() - edit_elapsed;
 
-        let mut diagnostics = tree
-            .as_ref()
-            .map(|t| parser::collect_diagnostics(t, &doc.source))
-            .unwrap_or_default();
-
-        if let Some(t) = tree.as_ref() {
-            diagnostics.extend(diagnostics::collect_function_diagnostics(t, &doc.source));
-            diagnostics.extend(diagnostics::check_unused_variables(t, &doc.source));
-        }
-
-        let defs = tree
-            .as_ref()
-            .map(|t| extract::extract_definitions(t, &doc.source));
-
         let source_len = doc.source.len();
         doc.tree = tree;
 
         // Drop the DashMap RefMut before awaiting (it's not Send)
         drop(doc);
 
-        if let Some(defs) = defs {
-            let mut index = self.workspace_index.write().await;
-            index.update_file(&uri, defs);
-        }
-
-        // Check for undefined function calls (only after initial indexing is done)
-        if self.indexing_complete.load(Ordering::Acquire) {
-            if let Some(doc) = self.document_map.get(&uri_string) {
-                if let Some(t) = doc.tree.as_ref() {
-                    let index = self.workspace_index.read().await;
-                    diagnostics.extend(diagnostics::check_undefined_functions(
-                        t,
-                        &doc.source,
-                        &index,
-                    ));
-                }
-            }
-        }
-
         let total_elapsed = start.elapsed();
-
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
 
         let mode = if incremental { "incremental" } else if had_old_tree { "full (tree reset)" } else { "full (no prior tree)" };
         self.client
@@ -649,6 +669,9 @@ impl LanguageServer for Backend {
                 ),
             )
             .await;
+
+        // Schedule debounced diagnostics (runs after 150ms if no newer changes arrive)
+        self.schedule_diagnostics(uri, uri_string);
     }
 
     async fn did_save(&self, _params: DidSaveTextDocumentParams) {

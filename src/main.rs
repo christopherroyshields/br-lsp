@@ -65,6 +65,7 @@ async fn run_lsp() {
         workspace_index: Arc::new(RwLock::new(WorkspaceIndex::new())),
         workspace_folders: Arc::new(RwLock::new(Vec::new())),
         indexing_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        diagnostics_generation: Arc::new(DashMap::new()),
     })
     .finish();
 
