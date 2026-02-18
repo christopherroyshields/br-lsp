@@ -49,7 +49,8 @@
         "extensions": [
           ".brs",
           ".wbs"
-        ]
+        ],
+        "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
@@ -89,6 +90,11 @@
         }
       }
     ],
+    "configurationDefaults": {
+      "[br]": {
+        "files.encoding": "cp437"
+      }
+    },
     "configuration": {
       "type": "object",
       "title": "BR Language Server",
