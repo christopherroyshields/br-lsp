@@ -150,6 +150,30 @@
           "default": 5,
           "description": "Number of digits for line numbers (e.g., 5 for '00100'). Will be overridden by detected padding from surrounding lines."
         },
+        "br-lsp.diagnostics.syntax": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": true,
+          "description": "Report syntax errors from the tree-sitter parser."
+        },
+        "br-lsp.diagnostics.functions": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": true,
+          "description": "Report function diagnostics (missing FNEND, duplicate functions, parameter count/type mismatches)."
+        },
+        "br-lsp.diagnostics.undefinedFunctions": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": true,
+          "description": "Report calls to functions not defined in the workspace."
+        },
+        "br-lsp.diagnostics.unusedVariables": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": true,
+          "description": "Report unused DIM variables and unused LIBRARY imports."
+        },
         "br-lsp.trace.server": {
           "type": "string",
           "scope": "window",

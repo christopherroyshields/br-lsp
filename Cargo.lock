@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-br"
-version = "0.25.2"
+version = "0.25.6"
 dependencies = [
  "cc",
  "tree-sitter-language",

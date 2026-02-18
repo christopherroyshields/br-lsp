@@ -34,6 +34,25 @@ pub struct DocumentState {
     pub tree: Option<Tree>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DiagnosticsConfig {
+    pub syntax: bool,
+    pub functions: bool,
+    pub undefined_functions: bool,
+    pub unused_variables: bool,
+}
+
+impl Default for DiagnosticsConfig {
+    fn default() -> Self {
+        Self {
+            syntax: true,
+            functions: true,
+            undefined_functions: true,
+            unused_variables: true,
+        }
+    }
+}
+
 pub struct Backend {
     pub client: Client,
     pub document_map: Arc<DashMap<String, DocumentState>>,
@@ -42,6 +61,7 @@ pub struct Backend {
     pub workspace_folders: Arc<tokio::sync::RwLock<Vec<Url>>>,
     pub indexing_complete: Arc<AtomicBool>,
     pub diagnostics_generation: Arc<DashMap<String, Arc<AtomicU64>>>,
+    pub diagnostics_config: Arc<tokio::sync::RwLock<DiagnosticsConfig>>,
 }
 
 struct TextDocumentItem {
@@ -97,6 +117,101 @@ fn apply_change(rope: &mut Rope, source: &mut String, range: &Range, new_text: &
 }
 
 impl Backend {
+    async fn pull_diagnostics_config(&self) {
+        let items = vec![ConfigurationItem {
+            scope_uri: None,
+            section: Some("br-lsp.diagnostics".to_string()),
+        }];
+
+        let values = match self.client.configuration(items).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Failed to pull diagnostics config: {e}");
+                return;
+            }
+        };
+
+        let val = match values.into_iter().next() {
+            Some(v) => v,
+            None => return,
+        };
+
+        let mut config = self.diagnostics_config.write().await;
+        if let Some(obj) = val.as_object() {
+            if let Some(v) = obj.get("syntax").and_then(|v| v.as_bool()) {
+                config.syntax = v;
+            }
+            if let Some(v) = obj.get("functions").and_then(|v| v.as_bool()) {
+                config.functions = v;
+            }
+            if let Some(v) = obj.get("undefinedFunctions").and_then(|v| v.as_bool()) {
+                config.undefined_functions = v;
+            }
+            if let Some(v) = obj.get("unusedVariables").and_then(|v| v.as_bool()) {
+                config.unused_variables = v;
+            }
+        }
+
+        debug!("diagnostics config updated: {config:?}");
+    }
+
+    async fn republish_all_diagnostics(&self) {
+        let config = self.diagnostics_config.read().await;
+        let index = if self.indexing_complete.load(Ordering::Acquire) {
+            Some(self.workspace_index.read().await)
+        } else {
+            None
+        };
+
+        let to_publish: Vec<(String, Vec<Diagnostic>)> = self
+            .document_map
+            .iter()
+            .filter_map(|entry| {
+                let uri_string = entry.key().clone();
+                let doc = entry.value();
+                let t = doc.tree.as_ref()?;
+                let diags =
+                    Self::collect_all_diagnostics(t, &doc.source, &config, index.as_deref());
+                Some((uri_string, diags))
+            })
+            .collect();
+
+        for (uri_string, diags) in to_publish {
+            if let Ok(uri) = Url::parse(&uri_string) {
+                self.client.publish_diagnostics(uri, diags, None).await;
+            }
+        }
+    }
+
+    fn collect_all_diagnostics(
+        tree: &Tree,
+        source: &str,
+        config: &DiagnosticsConfig,
+        index: Option<&WorkspaceIndex>,
+    ) -> Vec<Diagnostic> {
+        let mut diagnostics = if config.syntax {
+            parser::collect_diagnostics(tree, source)
+        } else {
+            Vec::new()
+        };
+
+        if config.functions {
+            diagnostics.extend(diagnostics::collect_function_diagnostics(tree, source));
+        }
+
+        if config.unused_variables {
+            diagnostics.extend(diagnostics::check_unused_variables(tree, source));
+        }
+
+        if config.undefined_functions {
+            if let Some(idx) = index {
+                diagnostics.extend(diagnostics::check_undefined_functions(tree, source, idx));
+            }
+        }
+
+        diagnostics
+    }
+
     async fn on_change(&self, params: TextDocumentItem) {
         let start = std::time::Instant::now();
         let rope = Rope::from_str(&params.text);
@@ -107,16 +222,6 @@ impl Backend {
         };
         let parse_elapsed = start.elapsed();
 
-        let mut diagnostics = tree
-            .as_ref()
-            .map(|t| parser::collect_diagnostics(t, &params.text))
-            .unwrap_or_default();
-
-        if let Some(t) = tree.as_ref() {
-            diagnostics.extend(diagnostics::collect_function_diagnostics(t, &params.text));
-            diagnostics.extend(diagnostics::check_unused_variables(t, &params.text));
-        }
-
         // Update workspace index with definitions from this file
         if let Some(t) = tree.as_ref() {
             let defs = extract::extract_definitions(t, &params.text);
@@ -124,13 +229,17 @@ impl Backend {
             index.update_file(&params.uri, defs);
         }
 
-        // Check for undefined function calls (only after initial indexing is done)
-        if self.indexing_complete.load(Ordering::Acquire) {
-            if let Some(t) = tree.as_ref() {
-                let index = self.workspace_index.read().await;
-                diagnostics.extend(diagnostics::check_undefined_functions(t, &params.text, &index));
-            }
-        }
+        let diagnostics = if let Some(t) = tree.as_ref() {
+            let config = self.diagnostics_config.read().await;
+            let index = if self.indexing_complete.load(Ordering::Acquire) {
+                Some(self.workspace_index.read().await)
+            } else {
+                None
+            };
+            Self::collect_all_diagnostics(t, &params.text, &config, index.as_deref())
+        } else {
+            Vec::new()
+        };
 
         let uri_string = params.uri.to_string();
         self.document_map.insert(
@@ -171,6 +280,7 @@ impl Backend {
         let document_map = self.document_map.clone();
         let workspace_index = self.workspace_index.clone();
         let indexing_complete = self.indexing_complete.clone();
+        let diagnostics_config = self.diagnostics_config.clone();
 
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(DIAGNOSTICS_DEBOUNCE_MS)).await;
@@ -194,22 +304,20 @@ impl Backend {
                 None => return,
             };
 
-            let mut diagnostics = parser::collect_diagnostics(&tree, &source);
-            diagnostics.extend(diagnostics::collect_function_diagnostics(&tree, &source));
-            diagnostics.extend(diagnostics::check_unused_variables(&tree, &source));
-
             let defs = extract::extract_definitions(&tree, &source);
             {
                 let mut index = workspace_index.write().await;
                 index.update_file(&uri, defs);
             }
 
-            if indexing_complete.load(Ordering::Acquire) {
-                let index = workspace_index.read().await;
-                diagnostics.extend(diagnostics::check_undefined_functions(
-                    &tree, &source, &index,
-                ));
-            }
+            let config = diagnostics_config.read().await;
+            let index = if indexing_complete.load(Ordering::Acquire) {
+                Some(workspace_index.read().await)
+            } else {
+                None
+            };
+            let diagnostics =
+                Backend::collect_all_diagnostics(&tree, &source, &config, index.as_deref());
 
             let count = diagnostics.len();
             client.publish_diagnostics(uri, diagnostics, None).await;
@@ -348,7 +456,10 @@ impl Backend {
         locations
     }
 
-    fn scan_workspace_diagnostics(folder: &Url) -> Vec<(Url, Vec<Diagnostic>)> {
+    fn scan_workspace_diagnostics(
+        folder: &Url,
+        config: &DiagnosticsConfig,
+    ) -> Vec<(Url, Vec<Diagnostic>)> {
         let path = match folder.to_file_path() {
             Ok(p) => p,
             Err(()) => {
@@ -379,9 +490,8 @@ impl Backend {
                 let mut ts_parser = parser::new_parser();
                 let tree = parser::parse(&mut ts_parser, &source, None)?;
 
-                let mut diags = parser::collect_diagnostics(&tree, &source);
-                diags.extend(diagnostics::collect_function_diagnostics(&tree, &source));
-                diags.extend(diagnostics::check_unused_variables(&tree, &source));
+                let diags =
+                    Self::collect_all_diagnostics(&tree, &source, config, None);
 
                 let uri = Url::from_file_path(file_path).ok()?;
                 Some((uri, diags))
@@ -497,12 +607,16 @@ impl LanguageServer for Backend {
             warn!("Failed to register file watcher: {e}");
         }
 
+        // Pull initial diagnostics config from the client
+        self.pull_diagnostics_config().await;
+
         // Spawn background workspace scan
         let folders = self.workspace_folders.read().await.clone();
         let index = self.workspace_index.clone();
         let client = self.client.clone();
         let indexing_complete = self.indexing_complete.clone();
         let document_map = self.document_map.clone();
+        let diagnostics_config = self.diagnostics_config.clone();
 
         tokio::spawn(async move {
             let token = NumberOrString::String("workspace-indexing".to_string());
@@ -573,6 +687,7 @@ impl LanguageServer for Backend {
             // Re-publish diagnostics for all open documents now that the
             // workspace index is available for undefined-function checks.
             let to_publish: Vec<(String, Vec<Diagnostic>)> = {
+                let config = diagnostics_config.read().await;
                 let idx = index.read().await;
                 document_map
                     .iter()
@@ -580,14 +695,12 @@ impl LanguageServer for Backend {
                         let uri_string = entry.key().clone();
                         let doc = entry.value();
                         let t = doc.tree.as_ref()?;
-                        let mut diags = parser::collect_diagnostics(t, &doc.source);
-                        diags.extend(diagnostics::collect_function_diagnostics(t, &doc.source));
-                        diags.extend(diagnostics::check_unused_variables(t, &doc.source));
-                        diags.extend(diagnostics::check_undefined_functions(
+                        let diags = Backend::collect_all_diagnostics(
                             t,
                             &doc.source,
-                            &idx,
-                        ));
+                            &config,
+                            Some(&idx),
+                        );
                         Some((uri_string, diags))
                     })
                     .collect()
@@ -1338,6 +1451,8 @@ impl LanguageServer for Backend {
 
     async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
         debug!("configuration changed!");
+        self.pull_diagnostics_config().await;
+        self.republish_all_diagnostics().await;
     }
 
     async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
@@ -1506,11 +1621,12 @@ impl LanguageServer for Backend {
         if params.command == "br-lsp.scanAll" {
             let start = std::time::Instant::now();
             let folders = self.workspace_folders.read().await.clone();
+            let config = self.diagnostics_config.read().await.clone();
 
             let results = tokio::task::spawn_blocking(move || {
                 let mut all_results: Vec<(Url, Vec<Diagnostic>)> = Vec::new();
                 for folder in &folders {
-                    all_results.extend(Self::scan_workspace_diagnostics(folder));
+                    all_results.extend(Self::scan_workspace_diagnostics(folder, &config));
                 }
                 all_results
             })
