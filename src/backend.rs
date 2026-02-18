@@ -111,6 +111,7 @@ impl Backend {
 
         if let Some(t) = tree.as_ref() {
             diagnostics.extend(diagnostics::collect_function_diagnostics(t, &params.text));
+            diagnostics.extend(diagnostics::check_unused_variables(t, &params.text));
         }
 
         // Update workspace index with definitions from this file
@@ -309,6 +310,7 @@ impl Backend {
 
                 let mut diags = parser::collect_diagnostics(&tree, &source);
                 diags.extend(diagnostics::collect_function_diagnostics(&tree, &source));
+                diags.extend(diagnostics::check_unused_variables(&tree, &source));
 
                 let uri = Url::from_file_path(file_path).ok()?;
                 Some((uri, diags))
@@ -348,7 +350,7 @@ impl LanguageServer for Backend {
                     },
                 )),
                 completion_provider: Some(CompletionOptions {
-                    resolve_provider: Some(false),
+                    resolve_provider: Some(true),
                     trigger_characters: None,
                     work_done_progress_options: Default::default(),
                     all_commit_characters: None,
@@ -379,6 +381,7 @@ impl LanguageServer for Backend {
                         ..Default::default()
                     },
                 )),
+                document_highlight_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Right(RenameOptions {
                     prepare_provider: Some(true),
                     work_done_progress_options: Default::default(),
@@ -508,6 +511,7 @@ impl LanguageServer for Backend {
                         let t = doc.tree.as_ref()?;
                         let mut diags = parser::collect_diagnostics(t, &doc.source);
                         diags.extend(diagnostics::collect_function_diagnostics(t, &doc.source));
+                        diags.extend(diagnostics::check_unused_variables(t, &doc.source));
                         diags.extend(diagnostics::check_undefined_functions(
                             t,
                             &doc.source,
@@ -598,6 +602,7 @@ impl LanguageServer for Backend {
 
         if let Some(t) = tree.as_ref() {
             diagnostics.extend(diagnostics::collect_function_diagnostics(t, &doc.source));
+            diagnostics.extend(diagnostics::check_unused_variables(t, &doc.source));
         }
 
         let defs = tree
@@ -676,6 +681,53 @@ impl LanguageServer for Backend {
         }
     }
 
+    async fn completion_resolve(&self, mut item: CompletionItem) -> Result<CompletionItem> {
+        let data = match item
+            .data
+            .as_ref()
+            .and_then(|v| serde_json::from_value::<completions::CompletionData>(v.clone()).ok())
+        {
+            Some(d) => d,
+            None => return Ok(item),
+        };
+
+        let docs = match data {
+            completions::CompletionData::Builtin { ref name, overload } => {
+                let entries = builtins::lookup(name);
+                entries
+                    .get(overload)
+                    .map(completions::format_builtin_docs)
+            }
+            completions::CompletionData::Local { ref name, ref uri } => {
+                self.document_map.get(uri).and_then(|doc| {
+                    let tree = doc.tree.as_ref()?;
+                    let defs = extract::extract_definitions(tree, &doc.source);
+                    defs.into_iter()
+                        .find(|d| d.name.eq_ignore_ascii_case(name))
+                        .map(|d| completions::format_function_docs(&d))
+                })
+            }
+            completions::CompletionData::Workspace { ref name } => {
+                let index = self.workspace_index.read().await;
+                let entries = index.lookup(name);
+                entries
+                    .iter()
+                    .find(|e| !e.def.is_import_only)
+                    .or_else(|| entries.first())
+                    .map(|e| completions::format_function_docs(&e.def))
+            }
+        };
+
+        if let Some(md) = docs {
+            item.documentation = Some(Documentation::MarkupContent(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: md,
+            }));
+        }
+
+        Ok(item)
+    }
+
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = params.text_document_position.text_document.uri.clone();
         let uri_string = uri.to_string();
@@ -729,6 +781,42 @@ impl LanguageServer for Backend {
         });
 
         Ok(locations)
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let uri_string = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let position = params.text_document_position_params.position;
+
+        let highlights = self.document_map.get(&uri_string).and_then(|doc| {
+            let tree = doc.tree.as_ref()?;
+            let refs = references::find_references(
+                tree,
+                &doc.source,
+                position.line as usize,
+                position.character as usize,
+            );
+            if refs.is_empty() {
+                None
+            } else {
+                Some(
+                    refs.into_iter()
+                        .map(|range| DocumentHighlight {
+                            range,
+                            kind: Some(DocumentHighlightKind::TEXT),
+                        })
+                        .collect(),
+                )
+            }
+        });
+
+        Ok(highlights)
     }
 
     async fn prepare_rename(
@@ -993,10 +1081,15 @@ impl LanguageServer for Backend {
                 // User function — look up in workspace index
                 let index = self.workspace_index.read().await;
                 let defs = index.lookup(fn_name);
-                if defs.is_empty() {
-                    return Ok(None);
+                // Prefer actual def statements over library import entries
+                let def = defs
+                    .iter()
+                    .find(|d| !d.def.is_import_only)
+                    .or_else(|| defs.first());
+                match def {
+                    Some(d) => format_user_hover(&d.def),
+                    None => return Ok(None),
                 }
-                format_user_hover(&defs[0].def)
             }
         };
 
