@@ -1,0 +1,144 @@
+{
+  "fnReadLayoutArrays(LayoutName$*255,&Prefix$;mat SSubs$,mat NSubs$)": {
+    "prefix": "fnReadLayoutArrays",
+    "body": [
+      "dim S_${1:StringSubs}Subs$(1), N_${1:NumericSubs}Subs$(1), ${1:File}Prefix$",
+      "fnReadLayoutArrays(\"${1:layout}\",${1:&prefix}Prefix$,mat S_${1:StringSubs}Subs$,mat N_${1:NumericSubs}Subs$)"
+    ],
+    "description": "Reads the file layout and returns the Record Detail information in a bunch of arrays. Returns the field count."
+  },
+  "fnReadLayoutArrays(LayoutName$*255,&Prefix$;mat SSubs$,mat NSubs$,mat SSpec$, ...)": {
+    "prefix": "fnReadLayoutArraysFull",
+    "body": [
+      "dim ${1:StringSubs}_S_Subs$(1), ${1:NumericSubs}_N_Subs$(1), ${1:File}_Prefix$",
+      "dim ${1:StringSpec}_S_Spec$(1), ${1:NumericSpec}_N_Spec$(1)",
+      "dim ${1:StringDescription}_S_Description$(1), ${1:NumericDescription}_N_Description$(1)",
+      "dim ${1:StringPos}_S_Pos(1), mat ${1:NumericPos}_N_Pos(1)",
+      "",
+      "fnReadLayoutArrays(\"${1:layout}\",${1:&prefix}_Prefix$,mat ${1:StringSpec}_S_Spec$, mat ${1:NumericSpec}_N_Spec$,mat ${1:StringDescription}_S_Description$, mat ${1:NumericDescription}_N_Description$,mat ${1:StringPos}_S_Pos(1), mat ${1:NumericPos}_N_Pos"
+    ],
+    "description": "Reads the file layout and returns the Record Detail information in a bunch of arrays. Returns the field count."
+  },
+  "fnMakeSubProc(FileName$*255;mat Subs$,mat F$,mat F)": {
+    "prefix": "fnMakeSubProc",
+    "body": [
+      "dim Subscripts$(1)*1023",
+      "",
+      "fnMakeSubProc(\"${1:layout}\",mat Subscripts$,mat ${1:layout}$,mat ${1:layout})",
+      "for ${2:Index}=1 to udim(mat Subscripts$)",
+      "\texecute Subscripts$(${2:Index})",
+      "next ${2:Index}"
+    ],
+    "description": "Sets the subscripts for a data file."
+  },
+  "fnReadLayouts(mat LayoutList$) with Dims": {
+    "prefix": "fnReadLayouts",
+    "body": [
+      "dim ${1:LayoutList}$(1)",
+      "fnReadLayouts(mat ${1:LayoutList}$)"
+    ],
+    "description": "Reads the list of file layouts into the provided array."
+  },
+  "open #(FileHandle:=fnGetFileNumber)": {
+    "prefix": "openNumber",
+    "body": [
+      "open #(${1:filehandle}:=fnGetFileNumber): $0"
+    ],
+    "description": "Snippet to open a non-FileIO file using fnGetFileNumber to find a free file number."
+  },
+  "fnOpen(LayoutName$, Mat F$, Mat F, Mat Form$; Input, KeyNum) with Dims": {
+    "prefix": "fnOpenDims",
+    "body": [
+      "dim ${1:layout}, ${1:layout}$(1)*${2:1024}, ${1:layout}(1)",
+      "let ${1:layout}=fnOpen(\"${1:layout}\",mat ${1:layout}$,mat ${1:layout},mat form$)"
+    ],
+    "description": "Opens file using Fileio, returning the file handle, and Dimming the necessary Variables."
+  },
+  "fnOpen() ... Read Loop": {
+    "prefix": "fnOpenReadLoop",
+    "body": [
+      "dim ${1:layout}, ${1:layout}$(1)*${2:1024},${1:layout}(1)",
+      "",
+      "let ${1:layout}=fnopen(\"${1:layout}\",mat ${1:layout}$,mat ${1:layout},mat form$,1)",
+      "restore #${1:layout}: error IGNORE",
+      "do until File(${1:layout})",
+      "\tread #${1:layout}, using Form$(${1:layout}) : Mat ${1:layout}$,Mat ${1:layout} eof IGNORE",
+      "\tif File(${1:layout})=0 then",
+      "\t\t${3:}",
+      "\tend if",
+      "loop",
+      "close #${1:layout}:"
+    ],
+    "description": "Opens file using Fileio and reads all records of the file in a loop.\n"
+  },
+  "fnOpen() ... Read By Key": {
+    "prefix": "fnOpenReadLoopKey",
+    "body": [
+      "dim ${1:layout}, ${1:layout}$(1)*${2:1024},${1:layout}(1)",
+      "",
+      "let ${1:layout}=fnopen(\"${1:layout}\",mat ${1:layout}$,mat ${1:layout},mat form$)",
+      "restore #${1:layout}>=${1:layout}key$: error IGNORE",
+      "do until File(${1:layout})",
+      "\tread #${1:layout}, using Form$(${1:layout}) : Mat ${1:layout}$,Mat ${1:layout} eof IGNORE",
+      "\tlet ${1:layout}rec_key$ = fnBuildKey$(\"${1:layout}\",mat ${1:layout}$,mat ${1:layout})",
+      "\tif File(${1:layout})=0 and ${1:layout}rec_key$ == ${1:layout}key$ then",
+      "\t\t${3:}",
+      "\tend if",
+      "loop",
+      "close #${1:layout}:"
+    ],
+    "description": "Opens file using Fileio and reads all records of the file in a loop."
+  },
+  "fnOpen() ... Read One": {
+    "prefix": "fnOpenReadOne",
+    "body": [
+      "dim ${1:layout}, ${1:layout}$(1)*${2:1024},${1:layout}(1)",
+      "let ${1:layout}=fnopen(\"${1:layout}\",mat ${1:layout}$,mat ${1:layout},mat form$,1)",
+      "read #${1:layout}, using Form$(${1:layout}), key=${1:layout}key$ : Mat ${1:layout}$,Mat ${1:layout}",
+      "close #${1:layout}:"
+    ],
+    "description": "Opens file and reads the given record by Key"
+  },
+  "FileIO Open Function": {
+    "prefix": "openfn",
+    "body": [
+      "dim LinkageEstablished",
+      "",
+      "def fnEstablishLinkage",
+      "\tif ~LinkageEstablished then",
+      "\t\tlibrary \"fileio\" : fnOpenFile,Fnclosefile,Fngetfilenumber,Fnkey$,FnBuildKey$,Fnreadlayoutarrays,Fndoeslayoutexist,Fnreadallkeys,fnReadRelativeDescription$,fnReadRelUnopenedDescription$,fnReadRelUnopenedNumber,fnUpdateFile,fnLog,fnLogArray,fnErrLog,fnReadLayouts,Fnmakeuniquekey$,FnDisplayLength,FnLength,FnReadDescription$,FnReadUnopenedDescription$,fnReadRecordWhere$,fnUniqueKey,fnReadNumber,fnReadUnopenedNumber,fnReadRelativeNumber,fnNotInFile,fnDataCrawler,fnDataEdit",
+      "\t\tlibrary \"fileio\" : fnMakeSubProc,fnReadMatchingKeys,fnReadAllNewKeys,fnReadFilterKeys,fnReadEntireLayout,fnReadLayoutHeader,fnReadSubs,fnReadLayoutPath$,fnReadKeyFiles, fnAskCombo$,fnRunProcFile,fnBuildProcFile,fnDataShow",
+      "\t\tlibrary \"screenio\" : fnCallScreen$,fnFindSubscript,fnFm$,fnfm,fnDisplayScreen,fnGetUniqueName$,fnIsInputSpec,fnIsOutputSpec,fnDays,fnBR42",
+      "\t\tlet linkageEstablished=1",
+      "\tend if",
+      "fnend",
+      "!",
+      "! #Autonumber# 99000,10",
+      "OPEN: ! ***** Function To Call Library Openfile And Proc Subs",
+      "def Fnopen(Filename$*255, Mat F$, Mat F, Mat Form$; Inputonly, Keynum, Dont_Sort_Subs, Path$*255, Mat Descr$, Mat Field_Widths,Supress_Prompt,Ignore_Errors,___,Index)",
+      "\tdim _FileIOSubs$(1)*800, _Loadedsubs$(1)*80",
+      "\tlet Fnopen=Fnopenfile(Filename$, Mat F$, Mat F, Mat Form$, Inputonly, Keynum, Dont_Sort_Subs, Path$, Mat Descr$, Mat Field_Widths, Mat _FileIOSubs$, Supress_Prompt,Ignore_Errors,Program$)",
+      "\tif Srch(_Loadedsubs$,Uprc$(Filename$))<=0 then : mat _Loadedsubs$(Udim(_Loadedsubs$)+1) : let _Loadedsubs$(Udim(_Loadedsubs$))=Uprc$(Filename$) : for Index=1 to Udim(Mat _Fileiosubs$) : execute (_Fileiosubs$(Index)) : next Index",
+      "fnend",
+      "",
+      "Ignore: Continue"
+    ],
+    "description": "The standard fnOpenFile function that needs to be included in all your programs when using FileIO."
+  },
+  "fnOpen() ... Write": {
+    "prefix": "fnOpenWrite",
+    "body": [
+      "dim Form$(1)*255",
+      "dim ${1:layout}, ${1:layout}$(1)*256,${1:layout}(1)",
+      "",
+      "let ${1:layout}=Fnopen(\"${1:layout}\",Mat ${1:layout}$,Mat ${1:layout},Mat Form$)",
+      "",
+      "let ${1:layout}$(${2:subscript})=${3:}",
+      "",
+      "write #${1:layout}, using Form$(${1:layout}) : Mat ${1:layout}$,Mat ${1:layout}",
+      "",
+      "let fnCloseFile(${1:layout},\"${1:layout}\")"
+    ],
+    "description": "Opens a file and updates a record, then closes it."
+  }
+}

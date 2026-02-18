@@ -1,0 +1,39 @@
+{
+  "For ... Next": {
+    "prefix": "for",
+    "body": [
+      "for ${2:i}=1 to udim(${1:array})",
+      "\t$0",
+      "next ${2:i}"
+    ],
+    "description": "For/Next Statement"
+  },
+  "Do ... Loop": {
+    "prefix": "do",
+    "body": [
+      "do",
+      "\t$0",
+      "\texit do",
+      "loop"
+    ],
+    "description": "Do Statement"
+  },
+  "Do While ... Loop": {
+    "prefix": "do while",
+    "body": [
+      "do while ${1:expression}",
+      "\t$0",
+      "loop"
+    ],
+    "description": "Do While Statement"
+  },
+  "Do Until ... Loop": {
+    "prefix": "do until",
+    "body": [
+      "do until ${1:expression}",
+      "\t$0",
+      "loop"
+    ],
+    "description": "Do Until Statement"
+  }
+}
