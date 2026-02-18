@@ -179,6 +179,8 @@ impl Backend {
                 return; // stale — a newer change superseded us
             }
 
+            let start = std::time::Instant::now();
+
             let (source, tree) = {
                 let doc = match document_map.get(&uri_string) {
                     Some(d) => d,
@@ -209,7 +211,19 @@ impl Backend {
                 ));
             }
 
+            let count = diagnostics.len();
             client.publish_diagnostics(uri, diagnostics, None).await;
+
+            client
+                .log_message(
+                    MessageType::LOG,
+                    format!(
+                        "diagnostics (debounced): {count} diagnostics, {} bytes ({:.1?})",
+                        source.len(),
+                        start.elapsed()
+                    ),
+                )
+                .await;
         });
     }
 
@@ -688,6 +702,7 @@ impl LanguageServer for Backend {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let start = std::time::Instant::now();
         let uri = params.text_document_position.text_document.uri.to_string();
         let position = params.text_document_position.position;
 
@@ -697,11 +712,21 @@ impl LanguageServer for Backend {
             None => return Ok(None),
         };
 
-        if items.is_empty() {
+        let count = items.len();
+        let result = if items.is_empty() {
             Ok(None)
         } else {
             Ok(Some(CompletionResponse::Array(items)))
-        }
+        };
+
+        self.client
+            .log_message(
+                MessageType::LOG,
+                format!("completion: {count} items ({:.1?})", start.elapsed()),
+            )
+            .await;
+
+        result
     }
 
     async fn completion_resolve(&self, mut item: CompletionItem) -> Result<CompletionItem> {
@@ -752,6 +777,7 @@ impl LanguageServer for Backend {
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let start = std::time::Instant::now();
         let uri = params.text_document_position.text_document.uri.clone();
         let uri_string = uri.to_string();
         let position = params.text_document_position.position;
@@ -774,6 +800,13 @@ impl LanguageServer for Backend {
         if let Some(name) = fn_name {
             // Cross-file search for user function references
             let locations = self.search_workspace_for_function_refs(&name).await;
+            let count = locations.len();
+            self.client
+                .log_message(
+                    MessageType::LOG,
+                    format!("references (cross-file, \"{name}\"): {count} locations ({:.1?})", start.elapsed()),
+                )
+                .await;
             if locations.is_empty() {
                 return Ok(None);
             }
@@ -802,6 +835,14 @@ impl LanguageServer for Backend {
                 )
             }
         });
+
+        let count = locations.as_ref().map_or(0, |v: &Vec<Location>| v.len());
+        self.client
+            .log_message(
+                MessageType::LOG,
+                format!("references (local): {count} locations ({:.1?})", start.elapsed()),
+            )
+            .await;
 
         Ok(locations)
     }
@@ -864,6 +905,7 @@ impl LanguageServer for Backend {
     }
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let start = std::time::Instant::now();
         let uri = params.text_document_position.text_document.uri.clone();
         let uri_string = uri.to_string();
         let position = params.text_document_position.position;
@@ -887,8 +929,19 @@ impl LanguageServer for Backend {
             // Cross-file rename for user functions
             let locations = self.search_workspace_for_function_refs(&name).await;
             if locations.is_empty() {
+                self.client
+                    .log_message(
+                        MessageType::LOG,
+                        format!(
+                            "rename (cross-file, \"{name}\" -> \"{}\"): 0 edits ({:.1?})",
+                            params.new_name,
+                            start.elapsed()
+                        ),
+                    )
+                    .await;
                 return Ok(None);
             }
+            let edit_count = locations.len();
             let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
                 std::collections::HashMap::new();
             for loc in locations {
@@ -897,6 +950,17 @@ impl LanguageServer for Backend {
                     new_text: params.new_name.clone(),
                 });
             }
+            let file_count = changes.len();
+            self.client
+                .log_message(
+                    MessageType::LOG,
+                    format!(
+                        "rename (cross-file, \"{name}\" -> \"{}\"): {edit_count} edits across {file_count} files ({:.1?})",
+                        params.new_name,
+                        start.elapsed()
+                    ),
+                )
+                .await;
             return Ok(Some(WorkspaceEdit {
                 changes: Some(changes),
                 ..Default::default()
@@ -919,6 +983,14 @@ impl LanguageServer for Backend {
                 Some(text_edits)
             }
         });
+
+        let count = edits.as_ref().map_or(0, |v| v.len());
+        self.client
+            .log_message(
+                MessageType::LOG,
+                format!("rename (local): {count} edits ({:.1?})", start.elapsed()),
+            )
+            .await;
 
         match edits {
             Some(text_edits) => {
@@ -965,6 +1037,7 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
+        let start = std::time::Instant::now();
         let uri = params.text_document_position_params.text_document.uri.clone();
         let uri_string = uri.to_string();
         let position = params.text_document_position_params.position;
@@ -979,8 +1052,14 @@ impl LanguageServer for Backend {
             ))
         });
 
-        match result {
+        let response = match result {
             Some(definition::DefinitionResult::Found(range)) => {
+                self.client
+                    .log_message(
+                        MessageType::LOG,
+                        format!("definition (local): found ({:.1?})", start.elapsed()),
+                    )
+                    .await;
                 Ok(Some(GotoDefinitionResponse::Scalar(Location {
                     uri,
                     range,
@@ -989,28 +1068,48 @@ impl LanguageServer for Backend {
             Some(definition::DefinitionResult::LookupFunction(name)) => {
                 let index = self.workspace_index.read().await;
                 let defs = index.lookup(&name);
-                // Prefer actual def statements over library import entries
                 let def = defs
                     .iter()
                     .find(|d| !d.def.is_import_only)
                     .or_else(|| defs.first());
                 if let Some(def) = def {
+                    self.client
+                        .log_message(
+                            MessageType::LOG,
+                            format!(
+                                "definition (workspace, \"{name}\"): found ({:.1?})",
+                                start.elapsed()
+                            ),
+                        )
+                        .await;
                     Ok(Some(GotoDefinitionResponse::Scalar(Location {
                         uri: def.uri.clone(),
                         range: def.def.selection_range,
                     })))
                 } else {
+                    self.client
+                        .log_message(
+                            MessageType::LOG,
+                            format!(
+                                "definition (workspace, \"{name}\"): not found ({:.1?})",
+                                start.elapsed()
+                            ),
+                        )
+                        .await;
                     Ok(None)
                 }
             }
             _ => Ok(None),
-        }
+        };
+
+        response
     }
 
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
+        let start = std::time::Instant::now();
         let uri_string = params.text_document.uri.to_string();
         let result = self.document_map.get(&uri_string).and_then(|doc| {
             let tree = doc.tree.as_ref()?;
@@ -1018,6 +1117,12 @@ impl LanguageServer for Backend {
         });
         match result {
             Some(syms) if !syms.is_empty() => {
+                self.client
+                    .log_message(
+                        MessageType::LOG,
+                        format!("document_symbol: {} symbols ({:.1?})", syms.len(), start.elapsed()),
+                    )
+                    .await;
                 Ok(Some(DocumentSymbolResponse::Nested(syms)))
             }
             _ => Ok(None),
@@ -1028,18 +1133,29 @@ impl LanguageServer for Backend {
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
+        let start = std::time::Instant::now();
         let uri = params.text_document.uri.to_string();
         let tokens = self.document_map.get(&uri).and_then(|doc| {
             let tree = doc.tree.as_ref()?;
             Some(semantic_tokens::collect_tokens(tree, &doc.source))
         });
-        match tokens {
-            Some(t) => Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
-                result_id: None,
-                data: t,
-            }))),
+        let result = match tokens {
+            Some(t) => {
+                let count = t.len();
+                self.client
+                    .log_message(
+                        MessageType::LOG,
+                        format!("semantic_tokens: {count} tokens ({:.1?})", start.elapsed()),
+                    )
+                    .await;
+                Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+                    result_id: None,
+                    data: t,
+                })))
+            }
             None => Ok(None),
-        }
+        };
+        result
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -1341,6 +1457,7 @@ impl LanguageServer for Backend {
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
+        let start = std::time::Instant::now();
         let index = self.workspace_index.read().await;
         let query = params.query.to_ascii_lowercase();
 
@@ -1364,6 +1481,18 @@ impl LanguageServer for Backend {
             })
             .collect();
 
+        self.client
+            .log_message(
+                MessageType::LOG,
+                format!(
+                    "workspace_symbol (\"{}\"): {} symbols ({:.1?})",
+                    params.query,
+                    symbols.len(),
+                    start.elapsed()
+                ),
+            )
+            .await;
+
         if symbols.is_empty() {
             Ok(None)
         } else {
@@ -1375,6 +1504,7 @@ impl LanguageServer for Backend {
         debug!("command executed: {}", params.command);
 
         if params.command == "br-lsp.scanAll" {
+            let start = std::time::Instant::now();
             let folders = self.workspace_folders.read().await.clone();
 
             let results = tokio::task::spawn_blocking(move || {
@@ -1395,7 +1525,19 @@ impl LanguageServer for Backend {
 
             let total_files = results.len();
             let files_with_errors = results.iter().filter(|(_, d)| !d.is_empty()).count();
+            let total_diags: usize = results.iter().map(|(_, d)| d.len()).sum();
             let summary = format!("Scanned {total_files} files, {files_with_errors} with errors");
+
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!(
+                        "scanAll: {total_files} files, {total_diags} diagnostics, {files_with_errors} files with errors ({:.1?})",
+                        start.elapsed()
+                    ),
+                )
+                .await;
+
             let csv = check::diagnostics_to_csv(&results);
 
             return Ok(Some(serde_json::json!({
