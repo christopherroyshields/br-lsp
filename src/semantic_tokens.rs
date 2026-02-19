@@ -4,24 +4,25 @@ use tower_lsp::lsp_types::{
 use tree_sitter::Tree;
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
-    SemanticTokenType::FUNCTION,     // 0
-    SemanticTokenType::VARIABLE,     // 1
-    SemanticTokenType::PARAMETER,    // 2
-    SemanticTokenType::KEYWORD,      // 3
-    SemanticTokenType::COMMENT,      // 4
-    SemanticTokenType::STRING,       // 5
-    SemanticTokenType::NUMBER,       // 6
-    SemanticTokenType::PROPERTY,     // 7
-    SemanticTokenType::ENUM_MEMBER,  // 8
-    SemanticTokenType::OPERATOR,     // 9
+    SemanticTokenType::FUNCTION,          // 0
+    SemanticTokenType::VARIABLE,          // 1
+    SemanticTokenType::PARAMETER,         // 2
+    SemanticTokenType::KEYWORD,           // 3
+    SemanticTokenType::COMMENT,           // 4
+    SemanticTokenType::STRING,            // 5
+    SemanticTokenType::NUMBER,            // 6
+    SemanticTokenType::PROPERTY,          // 7
+    SemanticTokenType::ENUM_MEMBER,       // 8
+    SemanticTokenType::OPERATOR,          // 9
     SemanticTokenType::new("lineNumber"), // 10
+    SemanticTokenType::new("invalid"),    // 11
 ];
 
 pub const TOKEN_MODIFIERS: &[SemanticTokenModifier] = &[
-    SemanticTokenModifier::DECLARATION,                      // bit 0
-    SemanticTokenModifier::DEFAULT_LIBRARY,                  // bit 1
-    SemanticTokenModifier::DEFINITION,                       // bit 2
-    SemanticTokenModifier::new("controlFlow"),               // bit 3
+    SemanticTokenModifier::DECLARATION,        // bit 0
+    SemanticTokenModifier::DEFAULT_LIBRARY,    // bit 1
+    SemanticTokenModifier::DEFINITION,         // bit 2
+    SemanticTokenModifier::new("controlFlow"), // bit 3
 ];
 
 pub fn legend() -> SemanticTokensLegend {
@@ -31,12 +32,12 @@ pub fn legend() -> SemanticTokensLegend {
     }
 }
 
-struct RawToken {
-    line: u32,
-    start: u32,
-    length: u32,
-    token_type: u32,
-    modifiers: u32,
+pub(crate) struct RawToken {
+    pub line: u32,
+    pub start: u32,
+    pub length: u32,
+    pub token_type: u32,
+    pub modifiers: u32,
 }
 
 pub fn collect_tokens(tree: &Tree, source: &str) -> Vec<SemanticToken> {
@@ -69,7 +70,8 @@ fn walk_node(
         emit_mat_keyword(node, source, tokens);
     }
 
-    if let Some((token_type, modifiers)) = classify_node(kind, is_named, node, in_parameter, in_dim) {
+    if let Some((token_type, modifiers)) = classify_node(kind, is_named, node, in_parameter, in_dim)
+    {
         let start = node.start_position();
         let end = node.end_position();
 
@@ -152,17 +154,17 @@ fn classify_node(
                 Some((1, modifiers)) // variable
             }
         }
-        "statement" if !is_named => Some((3, 0)),              // keyword (statement)
-        "keyword" if !is_named => Some((3, 1 << 3)),          // keyword + controlFlow
+        "statement" if !is_named => Some((3, 0)), // keyword (statement)
+        "keyword" if !is_named => Some((3, 1 << 3)), // keyword + controlFlow
         "comment" | "multiline_comment" | "doc_comment" => Some((4, 0)), // comment
-        "string" | "template_string" => Some((5, 0)),         // string
-        "number" | "int" => Some((6, 0)),                         // number
+        "string" | "template_string" => Some((5, 0)), // string
+        "number" | "int" => Some((6, 0)),         // number
         "0" | "1" if !is_named && is_inside(node, "option_statement") => Some((6, 0)), // option base 0/1
-        "line_number" => Some((10, 0)),                        // lineNumber
-        "label" => Some((7, 1 << 2)),                          // property + definition
-        "label_reference" | "line_reference" => Some((7, 0)),  // property
-        "error_condition" => Some((8, 0)),                     // enumMember
-        "*" if !is_named && in_dim => Some((9, 0)),            // operator (length modifier)
+        "line_number" => Some((10, 0)),                                                // lineNumber
+        "label" => Some((7, 1 << 2)), // property + definition
+        "label_reference" | "line_reference" => Some((7, 0)), // property
+        "error_condition" => Some((8, 0)), // enumMember
+        "*" if !is_named && in_dim => Some((9, 0)), // operator (length modifier)
         _ => None,
     }
 }
@@ -198,8 +200,8 @@ fn emit_mat_keyword(node: tree_sitter::Node, source: &str, tokens: &mut Vec<RawT
         tokens.push(RawToken {
             line: pos.row as u32,
             start: pos.column as u32,
-            length: 3, // "mat" is always 3 chars
-            token_type: 3,    // keyword
+            length: 3,         // "mat" is always 3 chars
+            token_type: 3,     // keyword
             modifiers: 1 << 3, // controlFlow
         });
     }
@@ -237,7 +239,7 @@ fn emit_multiline_token(
     }
 }
 
-fn encode_deltas(tokens: &mut [RawToken]) -> Vec<SemanticToken> {
+pub(crate) fn encode_deltas(tokens: &mut [RawToken]) -> Vec<SemanticToken> {
     // Sort by line, then by start column
     tokens.sort_by(|a, b| a.line.cmp(&b.line).then(a.start.cmp(&b.start)));
 
@@ -340,7 +342,9 @@ mod tests {
         let source = "print mat x\n";
         let tokens = parse_and_collect(source);
         // Should have keyword "print", keyword+controlFlow "mat", variable "x"
-        let mat_token = tokens.iter().find(|t| t.token_type == 3 && t.token_modifiers_bitset == (1 << 3));
+        let mat_token = tokens
+            .iter()
+            .find(|t| t.token_type == 3 && t.token_modifiers_bitset == (1 << 3));
         assert!(mat_token.is_some(), "mat should be keyword+controlFlow");
     }
 

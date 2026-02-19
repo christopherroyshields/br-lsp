@@ -219,7 +219,11 @@ fn check_duplicate_functions(tree: &Tree, source: &str) -> Vec<Diagnostic> {
                 .utf8_text(source.as_bytes())
                 .unwrap_or("")
                 .to_string();
-            functions.push((name.to_ascii_lowercase(), name, parser::node_range(name_node)));
+            functions.push((
+                name.to_ascii_lowercase(),
+                name,
+                parser::node_range(name_node),
+            ));
         }
     }
 
@@ -298,7 +302,10 @@ pub(crate) fn argument_type(arg_node: Node) -> Option<ParamKind> {
 
 /// Collect argument nodes paired with their positional index from an `arguments` node.
 /// Empty positions (e.g. between consecutive commas) yield (index, None).
-pub(crate) fn collect_argument_nodes<'a>(args_node: Node<'a>, source: &[u8]) -> Vec<(usize, Option<Node<'a>>)> {
+pub(crate) fn collect_argument_nodes<'a>(
+    args_node: Node<'a>,
+    source: &[u8],
+) -> Vec<(usize, Option<Node<'a>>)> {
     let mut result = Vec::new();
     let mut pos = 0;
     let mut has_any = false;
@@ -333,8 +340,7 @@ fn types_compatible(expected: ParamKind, actual: ParamKind) -> bool {
     }
     matches!(
         (expected, actual),
-        (ParamKind::NumericArray, ParamKind::Numeric)
-            | (ParamKind::StringArray, ParamKind::String)
+        (ParamKind::NumericArray, ParamKind::Numeric) | (ParamKind::StringArray, ParamKind::String)
     )
 }
 
@@ -408,9 +414,7 @@ fn check_parameter_count(tree: &Tree, source: &str) -> Vec<Diagnostic> {
 
         // System function names (Tab, Rec, etc.) without parentheses are
         // ambiguous — they could be variable references. Skip the check.
-        if !has_paren
-            && (kind == "numeric_system_function" || kind == "string_system_function")
-        {
+        if !has_paren && (kind == "numeric_system_function" || kind == "string_system_function") {
             continue;
         }
 
@@ -530,10 +534,7 @@ fn check_parameter_count(tree: &Tree, source: &str) -> Vec<Diagnostic> {
                         }
                     });
                     if !any_accepts {
-                        let expected_kind = matching[0]
-                            .params
-                            .get(*pos)
-                            .and_then(|p| p.kind());
+                        let expected_kind = matching[0].params.get(*pos).and_then(|p| p.kind());
                         if let Some(expected) = expected_kind {
                             diagnostics.push(Diagnostic {
                                 range: parser::node_range(arg),
@@ -591,14 +592,11 @@ fn check_unused_dim_variables(tree: &Tree, source: &str) -> Vec<Diagnostic> {
     // Count total references per lowercase name
     let mut total_counts: HashMap<String, usize> = HashMap::new();
     for r in &all_results {
-        *total_counts
-            .entry(r.text.to_ascii_lowercase())
-            .or_default() += 1;
+        *total_counts.entry(r.text.to_ascii_lowercase()).or_default() += 1;
     }
 
     // Group dim entries by lowercase name
-    let mut dim_entries: HashMap<String, Vec<(&str, tower_lsp::lsp_types::Range)>> =
-        HashMap::new();
+    let mut dim_entries: HashMap<String, Vec<(&str, tower_lsp::lsp_types::Range)>> = HashMap::new();
     for r in &dim_results {
         dim_entries
             .entry(r.text.to_ascii_lowercase())
@@ -635,15 +633,12 @@ fn check_unused_library_imports(tree: &Tree, source: &str) -> Vec<Diagnostic> {
     }
 
     // Query all function_name nodes in the file
-    let all_fn_names =
-        parser::run_query("(function_name) @name", tree.root_node(), source);
+    let all_fn_names = parser::run_query("(function_name) @name", tree.root_node(), source);
 
     // Count per lowercase name
     let mut fn_counts: HashMap<String, usize> = HashMap::new();
     for r in &all_fn_names {
-        *fn_counts
-            .entry(r.text.to_ascii_lowercase())
-            .or_default() += 1;
+        *fn_counts.entry(r.text.to_ascii_lowercase()).or_default() += 1;
     }
 
     let mut diagnostics = Vec::new();
@@ -877,7 +872,10 @@ mod tests {
         let source = "dim A$(3)*10\nlet X=udim(mat A$)+1\n";
         let tree = parse(source);
         let diags = check_parameter_count(&tree, source);
-        assert!(diags.is_empty(), "udim with inline args should not trigger diagnostic");
+        assert!(
+            diags.is_empty(),
+            "udim with inline args should not trigger diagnostic"
+        );
     }
 
     // --- Parameter type tests ---
@@ -937,7 +935,10 @@ mod tests {
         let source = "def fnFoo(mat A$)\nfnend\nlet X=fnFoo(\"hi\")\n";
         let tree = parse(source);
         let diags = check_parameter_count(&tree, source);
-        assert!(diags.is_empty(), "scalar string for string array should be OK");
+        assert!(
+            diags.is_empty(),
+            "scalar string for string array should be OK"
+        );
     }
 
     #[test]
@@ -1001,7 +1002,10 @@ mod tests {
         let source = "dim A$(3)*10\nlet mat2str(mat A$,B$,\",\")\n";
         let tree = parse(source);
         let diags = check_parameter_count(&tree, source);
-        assert!(diags.is_empty(), "Mat2Str should accept string arrays: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "Mat2Str should accept string arrays: {diags:?}"
+        );
     }
 
     #[test]
@@ -1069,7 +1073,10 @@ mod tests {
         );
 
         let diags = check_undefined_functions(&tree, source, &index);
-        assert!(diags.is_empty(), "workspace-defined function should not warn");
+        assert!(
+            diags.is_empty(),
+            "workspace-defined function should not warn"
+        );
     }
 
     #[test]
@@ -1233,8 +1240,7 @@ mod tests {
 
     #[test]
     fn check_unused_variables_combined() {
-        let source =
-            "dim A$(10)*30\nlibrary \"utils.dll\": fnCalc\nlet X=fnCalc(1)\n";
+        let source = "dim A$(10)*30\nlibrary \"utils.dll\": fnCalc\nlet X=fnCalc(1)\n";
         let tree = parse(source);
         let diags = check_unused_variables(&tree, source);
         // A$ is unused dim, fnCalc is used

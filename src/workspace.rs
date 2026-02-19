@@ -76,7 +76,44 @@ impl WorkspaceIndex {
 
     /// Returns the highest-priority definition for `name` relative to `current_uri`.
     pub fn lookup_best(&self, name: &str, current_uri: &str) -> Option<&IndexedFunctionDef> {
-        self.lookup_prioritized(name, current_uri).into_iter().next()
+        self.lookup_prioritized(name, current_uri)
+            .into_iter()
+            .next()
+    }
+
+    /// Returns all definitions for `name`, sorted by priority with library-link awareness:
+    /// 0. Local (same URI), non-import-only
+    /// 1. Linked (URI link path matches library statement path), non-import-only
+    /// 2. Library (`def library`), non-import-only
+    /// 3. Any non-import-only
+    /// 4. Import-only
+    pub fn lookup_prioritized_with_links(
+        &self,
+        name: &str,
+        current_uri: &str,
+        library_links: &HashMap<String, String>,
+        workspace_folders: &[Url],
+    ) -> Vec<&IndexedFunctionDef> {
+        let link_path = library_links.get(&name.to_ascii_lowercase());
+        let mut defs: Vec<&IndexedFunctionDef> = self.lookup(name).iter().collect();
+        defs.sort_by_key(|d| {
+            let is_local = d.uri.as_str() == current_uri;
+            let is_linked = link_path
+                .map(|lp| {
+                    uri_to_link_path(&d.uri, workspace_folders)
+                        .map(|up| up == *lp)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            match (is_local, d.def.is_import_only, is_linked, d.def.is_library) {
+                (true, false, _, _) => 0,
+                (_, false, true, _) => 1,
+                (_, false, _, true) => 2,
+                (_, false, _, false) => 3,
+                (_, true, _, _) => 4,
+            }
+        });
+        defs
     }
 
     pub fn all_symbols(&self) -> Vec<&IndexedFunctionDef> {
@@ -153,6 +190,30 @@ const CP437_HIGH: [char; 128] = [
     '\u{2261}', '\u{00B1}', '\u{2265}', '\u{2264}', '\u{2320}', '\u{2321}', '\u{00F7}', '\u{2248}',
     '\u{00B0}', '\u{2219}', '\u{00B7}', '\u{221A}', '\u{207F}', '\u{00B2}', '\u{25A0}', '\u{00A0}',
 ];
+
+/// Strip workspace folder prefix from a URI, strip extension, lowercase, forward slashes.
+/// Returns `None` if the URI doesn't start with any workspace folder.
+pub fn uri_to_link_path(uri: &Url, workspace_folders: &[Url]) -> Option<String> {
+    let uri_str = uri.as_str();
+    for folder in workspace_folders {
+        let folder_str = folder.as_str();
+        // Ensure folder prefix ends with '/'
+        let prefix = if folder_str.ends_with('/') {
+            folder_str.to_string()
+        } else {
+            format!("{folder_str}/")
+        };
+        if let Some(relative) = uri_str.strip_prefix(&prefix) {
+            let relative_lower = relative.to_ascii_lowercase();
+            let stripped = relative_lower
+                .strip_suffix(".brs")
+                .or_else(|| relative_lower.strip_suffix(".wbs"))
+                .unwrap_or(&relative_lower);
+            return Some(stripped.to_string());
+        }
+    }
+    None
+}
 
 /// Check if a file path has a BR extension (.brs or .wbs), case-insensitive.
 pub fn is_br_file(path: &Path) -> bool {
@@ -335,7 +396,10 @@ mod tests {
 
         let results = index.unique_functions("file:///workspace/main.brs");
         let foo_count = results.iter().filter(|r| r.def.name == "fnFoo").count();
-        assert_eq!(foo_count, 1, "same-name function from 2 files should produce 1 result");
+        assert_eq!(
+            foo_count, 1,
+            "same-name function from 2 files should produce 1 result"
+        );
     }
 
     #[test]
@@ -359,7 +423,10 @@ mod tests {
         index.add_file(&uri, vec![make_def("fnLocal", false)]);
 
         let results = index.unique_functions("file:///workspace/main.brs");
-        assert!(results.is_empty(), "should exclude entries from current URI");
+        assert!(
+            results.is_empty(),
+            "should exclude entries from current URI"
+        );
     }
 
     #[test]
@@ -436,7 +503,10 @@ mod tests {
         // Neither is local
         let results = index.lookup_prioritized("fnFoo", "file:///workspace/other.brs");
         assert_eq!(results.len(), 2);
-        assert!(results[0].def.is_library, "library def should come before non-library");
+        assert!(
+            results[0].def.is_library,
+            "library def should come before non-library"
+        );
     }
 
     #[test]
@@ -449,8 +519,14 @@ mod tests {
 
         let results = index.lookup_prioritized("fnFoo", "file:///workspace/other.brs");
         assert_eq!(results.len(), 2);
-        assert!(!results[0].def.is_import_only, "non-import should come first");
-        assert!(results[1].def.is_import_only, "import-only should come last");
+        assert!(
+            !results[0].def.is_import_only,
+            "non-import should come first"
+        );
+        assert!(
+            results[1].def.is_import_only,
+            "import-only should come last"
+        );
     }
 
     #[test]
@@ -468,6 +544,87 @@ mod tests {
     #[test]
     fn lookup_best_empty() {
         let index = WorkspaceIndex::new();
-        assert!(index.lookup_best("fnNonexistent", "file:///x.brs").is_none());
+        assert!(index
+            .lookup_best("fnNonexistent", "file:///x.brs")
+            .is_none());
+    }
+
+    #[test]
+    fn uri_to_link_path_basic() {
+        let folders = vec![Url::parse("file:///workspace").unwrap()];
+        let uri = Url::parse("file:///workspace/vol002/rtflib.brs").unwrap();
+        assert_eq!(
+            uri_to_link_path(&uri, &folders),
+            Some("vol002/rtflib".to_string())
+        );
+    }
+
+    #[test]
+    fn uri_to_link_path_no_match() {
+        let folders = vec![Url::parse("file:///workspace").unwrap()];
+        let uri = Url::parse("file:///other/place/foo.brs").unwrap();
+        assert_eq!(uri_to_link_path(&uri, &folders), None);
+    }
+
+    #[test]
+    fn uri_to_link_path_case() {
+        let folders = vec![Url::parse("file:///workspace").unwrap()];
+        let uri = Url::parse("file:///workspace/CustLib.BRS").unwrap();
+        assert_eq!(
+            uri_to_link_path(&uri, &folders),
+            Some("custlib".to_string())
+        );
+    }
+
+    #[test]
+    fn lookup_prioritized_with_links_prefers_linked() {
+        let mut index = WorkspaceIndex::new();
+        let linked_uri = test_url("vol002/rtflib.brs");
+        let other_lib_uri = test_url("other/rtflib.brs");
+        let current_uri = test_url("main.brs");
+
+        index.add_file(&linked_uri, vec![make_def("fnRTF", true)]);
+        index.add_file(&other_lib_uri, vec![make_def("fnRTF", true)]);
+
+        let mut library_links = HashMap::new();
+        library_links.insert("fnrtf".to_string(), "vol002/rtflib".to_string());
+
+        let folders = vec![Url::parse("file:///workspace").unwrap()];
+
+        let results = index.lookup_prioritized_with_links(
+            "fnRTF",
+            current_uri.as_str(),
+            &library_links,
+            &folders,
+        );
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0].uri, linked_uri,
+            "linked library should come first"
+        );
+    }
+
+    #[test]
+    fn lookup_prioritized_with_links_local_still_wins() {
+        let mut index = WorkspaceIndex::new();
+        let local_uri = test_url("main.brs");
+        let linked_uri = test_url("vol002/rtflib.brs");
+
+        index.add_file(&local_uri, vec![make_def("fnFoo", false)]);
+        index.add_file(&linked_uri, vec![make_def("fnFoo", true)]);
+
+        let mut library_links = HashMap::new();
+        library_links.insert("fnfoo".to_string(), "vol002/rtflib".to_string());
+
+        let folders = vec![Url::parse("file:///workspace").unwrap()];
+
+        let results = index.lookup_prioritized_with_links(
+            "fnFoo",
+            local_uri.as_str(),
+            &library_links,
+            &folders,
+        );
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].uri, local_uri, "local def should still win");
     }
 }

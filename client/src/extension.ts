@@ -33,9 +33,14 @@ export async function activate(context: ExtensionContext) {
   let clientOptions: LanguageClientOptions = {
     documentSelector: [
       { scheme: "file", language: "br" },
+      { scheme: "file", language: "lay" },
     ],
     synchronize: {
-      fileEvents: workspace.createFileSystemWatcher("**/*.{brs,wbs}"),
+      fileEvents: [
+        workspace.createFileSystemWatcher("**/*.{brs,wbs}"),
+        workspace.createFileSystemWatcher("**/*.lay"),
+        workspace.createFileSystemWatcher("**/filelay/*"),
+      ],
     },
     outputChannel,
     traceOutputChannel,

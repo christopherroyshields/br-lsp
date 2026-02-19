@@ -21,12 +21,16 @@ fn collect_functions(tree: &Tree, source: &str) -> Vec<DocumentSymbol> {
 
     for r in &results {
         // Find the def_statement node to get function_name descendant
-        let def_node = match tree
-            .root_node()
-            .named_descendant_for_point_range(
-                tree_sitter::Point::new(r.range.start.line as usize, r.range.start.character as usize),
-                tree_sitter::Point::new(r.range.start.line as usize, r.range.start.character as usize),
-            ) {
+        let def_node = match tree.root_node().named_descendant_for_point_range(
+            tree_sitter::Point::new(
+                r.range.start.line as usize,
+                r.range.start.character as usize,
+            ),
+            tree_sitter::Point::new(
+                r.range.start.line as usize,
+                r.range.start.character as usize,
+            ),
+        ) {
             Some(n) => {
                 // Walk up to def_statement
                 let mut node = n;
@@ -72,7 +76,10 @@ fn collect_functions(tree: &Tree, source: &str) -> Vec<DocumentSymbol> {
     symbols
 }
 
-fn find_child_by_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+fn find_child_by_kind<'a>(
+    node: tree_sitter::Node<'a>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'a>> {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         if n.kind() == kind {
@@ -89,10 +96,22 @@ fn find_child_by_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tre
 #[allow(deprecated)]
 fn collect_dim_variables(tree: &Tree, source: &str) -> Vec<DocumentSymbol> {
     let queries = [
-        ("(dim_statement (stringreference name: (_) @name))", "string"),
-        ("(dim_statement (numberreference name: (_) @name))", "number"),
-        ("(dim_statement (stringarray name: (_) @name))", "stringarray"),
-        ("(dim_statement (numberarray name: (_) @name))", "numberarray"),
+        (
+            "(dim_statement (stringreference name: (_) @name))",
+            "string",
+        ),
+        (
+            "(dim_statement (numberreference name: (_) @name))",
+            "number",
+        ),
+        (
+            "(dim_statement (stringarray name: (_) @name))",
+            "stringarray",
+        ),
+        (
+            "(dim_statement (numberarray name: (_) @name))",
+            "numberarray",
+        ),
     ];
 
     let mut symbols = Vec::new();

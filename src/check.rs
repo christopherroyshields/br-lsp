@@ -218,7 +218,10 @@ mod tests {
     #[test]
     fn format_csv_empty() {
         let csv = format_csv(&[]);
-        assert_eq!(csv, "file,line,column,end_line,end_column,severity,message\n");
+        assert_eq!(
+            csv,
+            "file,line,column,end_line,end_column,severity,message\n"
+        );
     }
 
     #[test]
@@ -235,7 +238,10 @@ mod tests {
         let csv = format_csv(&diags);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], "file,line,column,end_line,end_column,severity,message");
+        assert_eq!(
+            lines[0],
+            "file,line,column,end_line,end_column,severity,message"
+        );
         assert_eq!(lines[1], "test.brs,10,1,10,15,error,Syntax error");
     }
 

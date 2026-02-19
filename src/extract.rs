@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use tower_lsp::lsp_types::Range;
 use tree_sitter::{Node, Tree};
 
@@ -407,6 +409,81 @@ fn find_identifier_name(node: Node, source: &str) -> Option<String> {
     None
 }
 
+/// Walk all `library_statement` nodes and return a mapping of
+/// lowercase function name → normalized library path.
+pub fn extract_library_links(tree: &Tree, source: &str) -> HashMap<String, String> {
+    let mut links = HashMap::new();
+    collect_library_links(tree.root_node(), source, &mut links);
+    links
+}
+
+fn collect_library_links(node: Node, source: &str, links: &mut HashMap<String, String>) {
+    if node.kind() == "library_statement" {
+        if let Some(path_node) = node.child_by_field_name("path") {
+            if let Some(raw) = extract_string_literal(path_node, source) {
+                let normalized = normalize_library_path(&raw);
+                // Collect function names from library_function_list
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "library_function_list" {
+                        let mut inner = child.walk();
+                        for grandchild in child.children(&mut inner) {
+                            if grandchild.kind() == "function_name" {
+                                if let Ok(name) = grandchild.utf8_text(source.as_bytes()) {
+                                    links.insert(
+                                        name.to_ascii_lowercase(),
+                                        normalized.clone(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_library_links(child, source, links);
+    }
+}
+
+/// DFS for a `"string"` leaf node and return its text with quotes stripped.
+fn extract_string_literal(node: Node, source: &str) -> Option<String> {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "string" {
+            let text = n.utf8_text(source.as_bytes()).ok()?;
+            // Strip surrounding quotes (either " or ')
+            let trimmed = text
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .or_else(|| {
+                    text.strip_prefix('\'')
+                        .and_then(|s| s.strip_suffix('\''))
+                });
+            return trimmed.map(|s| s.to_string());
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    None
+}
+
+/// Normalize a library path: backslash → `/`, lowercase, strip extension.
+pub fn normalize_library_path(raw: &str) -> String {
+    let s = raw.replace('\\', "/").to_ascii_lowercase();
+    s.strip_suffix(".brs")
+        .or_else(|| s.strip_suffix(".wbs"))
+        .or_else(|| s.strip_suffix(".dll"))
+        .unwrap_or(&s)
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -610,5 +687,52 @@ def fnAdd(A, B) = A + B
             defs[0].format_signature(),
             "fnPause(Howlong, [&thekey$], [&function])"
         );
+    }
+
+    fn parse_and_extract_links(source: &str) -> HashMap<String, String> {
+        let mut p = parser::new_parser();
+        let tree = parser::parse(&mut p, source, None).unwrap();
+        extract_library_links(&tree, source)
+    }
+
+    #[test]
+    fn library_links_basic() {
+        let links = parse_and_extract_links(
+            "library \"vol002\\rtflib\": fnRTF, fnRTFStart$\n",
+        );
+        assert_eq!(links.get("fnrtf").unwrap(), "vol002/rtflib");
+        assert_eq!(links.get("fnrtfstart$").unwrap(), "vol002/rtflib");
+    }
+
+    #[test]
+    fn library_links_with_extension() {
+        let links = parse_and_extract_links("library \"custlib.brs\": fnCalc\n");
+        assert_eq!(links.get("fncalc").unwrap(), "custlib");
+    }
+
+    #[test]
+    fn library_links_multiple_statements() {
+        let source = "\
+library \"vol002\\rtflib\": fnRTF
+library \"custlib\": fnCalc
+";
+        let links = parse_and_extract_links(source);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links.get("fnrtf").unwrap(), "vol002/rtflib");
+        assert_eq!(links.get("fncalc").unwrap(), "custlib");
+    }
+
+    #[test]
+    fn library_links_no_path() {
+        let links = parse_and_extract_links("library: fnFoo\n");
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn normalize_library_path_cases() {
+        assert_eq!(normalize_library_path("VOL002\\RTFLib"), "vol002/rtflib");
+        assert_eq!(normalize_library_path("custlib.brs"), "custlib");
+        assert_eq!(normalize_library_path("some/path.DLL"), "some/path");
+        assert_eq!(normalize_library_path("simple"), "simple");
     }
 }

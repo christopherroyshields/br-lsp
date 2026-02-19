@@ -6,6 +6,7 @@ mod completions;
 mod definition;
 mod diagnostics;
 mod extract;
+mod layout;
 mod parser;
 mod references;
 mod rename;
@@ -63,6 +64,7 @@ async fn run_lsp() {
         document_map: Arc::new(DashMap::new()),
         parser: std::sync::Mutex::new(parser::new_parser()),
         workspace_index: Arc::new(RwLock::new(WorkspaceIndex::new())),
+        layout_index: Arc::new(RwLock::new(layout::LayoutIndex::new())),
         workspace_folders: Arc::new(RwLock::new(Vec::new())),
         indexing_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         diagnostics_generation: Arc::new(DashMap::new()),

@@ -70,6 +70,7 @@ pub fn get_completions(
     uri: &str,
     position: Position,
     workspace_index: &WorkspaceIndex,
+    layout_index: &crate::layout::LayoutIndex,
 ) -> Vec<CompletionItem> {
     let mut items = Vec::new();
     items.extend(statement_completions());
@@ -82,6 +83,7 @@ pub fn get_completions(
     }
 
     items.extend(library_function_completions(uri, workspace_index));
+    items.extend(layout_subscript_completions(layout_index));
     items
 }
 
@@ -619,13 +621,52 @@ fn local_function_completions(
 }
 
 // ---------------------------------------------------------------------------
+// Layout subscript completions (#29)
+// ---------------------------------------------------------------------------
+
+fn layout_subscript_completions(layout_index: &crate::layout::LayoutIndex) -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+    for layout in layout_index.all_layouts() {
+        let filename = layout
+            .path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&layout.path);
+        for sub in &layout.subscripts {
+            // Build label: PREFIX + field name (without $) + $ suffix for strings
+            let is_string = sub.name.ends_with('$');
+            let base_name = sub.name.trim_end_matches('$');
+            let label = if is_string {
+                format!("{}{}$", layout.prefix, base_name)
+            } else {
+                format!("{}{}", layout.prefix, base_name)
+            };
+
+            items.push(CompletionItem {
+                label,
+                kind: Some(CompletionItemKind::VARIABLE),
+                detail: Some(format!("(subscript) {} {}", sub.name, sub.format)),
+                documentation: if sub.description.is_empty() {
+                    None
+                } else {
+                    Some(Documentation::String(sub.description.clone()))
+                },
+                label_details: Some(CompletionItemLabelDetails {
+                    description: Some(filename.to_string()),
+                    detail: None,
+                }),
+                ..Default::default()
+            });
+        }
+    }
+    items
+}
+
+// ---------------------------------------------------------------------------
 // Library (workspace) functions (#14)
 // ---------------------------------------------------------------------------
 
-fn library_function_completions(
-    current_uri: &str,
-    index: &WorkspaceIndex,
-) -> Vec<CompletionItem> {
+fn library_function_completions(current_uri: &str, index: &WorkspaceIndex) -> Vec<CompletionItem> {
     index
         .unique_functions(current_uri)
         .into_iter()
@@ -672,7 +713,9 @@ mod tests {
     fn statement_completions_not_empty() {
         let items = statement_completions();
         assert!(!items.is_empty());
-        assert!(items.iter().all(|i| i.kind == Some(CompletionItemKind::KEYWORD)));
+        assert!(items
+            .iter()
+            .all(|i| i.kind == Some(CompletionItemKind::KEYWORD)));
     }
 
     #[test]
@@ -695,7 +738,9 @@ mod tests {
     fn keyword_completions_count() {
         let items = keyword_completions();
         assert_eq!(items.len(), 4);
-        assert!(items.iter().all(|i| i.kind == Some(CompletionItemKind::KEYWORD)));
+        assert!(items
+            .iter()
+            .all(|i| i.kind == Some(CompletionItemKind::KEYWORD)));
     }
 
     #[test]
@@ -709,7 +754,9 @@ mod tests {
     fn builtin_completions_count() {
         let items = builtin_function_completions();
         assert_eq!(items.len(), 115);
-        assert!(items.iter().all(|i| i.kind == Some(CompletionItemKind::FUNCTION)));
+        assert!(items
+            .iter()
+            .all(|i| i.kind == Some(CompletionItemKind::FUNCTION)));
     }
 
     #[test]
@@ -730,7 +777,9 @@ mod tests {
         };
         let items = local_variable_completions(&tree, source, pos);
         assert!(!items.is_empty());
-        assert!(items.iter().all(|i| i.kind == Some(CompletionItemKind::VARIABLE)));
+        assert!(items
+            .iter()
+            .all(|i| i.kind == Some(CompletionItemKind::VARIABLE)));
     }
 
     #[test]
@@ -743,7 +792,10 @@ mod tests {
             character: 0,
         };
         let items = local_variable_completions(&tree, source, pos);
-        let x_count = items.iter().filter(|i| i.label.eq_ignore_ascii_case("X$")).count();
+        let x_count = items
+            .iter()
+            .filter(|i| i.label.eq_ignore_ascii_case("X$"))
+            .count();
         assert_eq!(x_count, 1, "X$ should appear exactly once");
     }
 
@@ -754,7 +806,9 @@ mod tests {
         let tree = parser::parse(&mut p, source, None).unwrap();
         let items = local_function_completions(&tree, source, "file:///test.brs");
         assert_eq!(items.len(), 2);
-        assert!(items.iter().all(|i| i.kind == Some(CompletionItemKind::FUNCTION)));
+        assert!(items
+            .iter()
+            .all(|i| i.kind == Some(CompletionItemKind::FUNCTION)));
         assert!(items.iter().any(|i| i.label == "fnAdd"));
         assert!(items.iter().any(|i| i.label == "fnCalc$"));
     }
@@ -774,14 +828,8 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         let uri_a = Url::parse("file:///workspace/a.brs").unwrap();
         let uri_b = Url::parse("file:///workspace/b.brs").unwrap();
-        index.add_file(
-            &uri_a,
-            vec![make_test_def("fnFoo", false, false)],
-        );
-        index.add_file(
-            &uri_b,
-            vec![make_test_def("fnBar", false, false)],
-        );
+        index.add_file(&uri_a, vec![make_test_def("fnFoo", false, false)]);
+        index.add_file(&uri_b, vec![make_test_def("fnBar", false, false)]);
 
         let items = library_function_completions(uri_a.as_str(), &index);
         let names: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -794,10 +842,7 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         let uri_a = Url::parse("file:///workspace/a.brs").unwrap();
         let uri_b = Url::parse("file:///workspace/b.brs").unwrap();
-        index.add_file(
-            &uri_a,
-            vec![make_test_def("fnReal", false, false)],
-        );
+        index.add_file(&uri_a, vec![make_test_def("fnReal", false, false)]);
         index.add_file(
             &uri_b,
             vec![
@@ -834,16 +879,18 @@ mod tests {
         let mut p = parser::new_parser();
         let tree = parser::parse(&mut p, source, None);
         let doc = DocumentState {
+            kind: crate::backend::DocumentKind::Br,
             rope: ropey::Rope::from_str(source),
             source: source.to_string(),
             tree,
         };
         let index = WorkspaceIndex::new();
+        let layout_index = crate::layout::LayoutIndex::new();
         let pos = Position {
             line: 99,
             character: 0,
         };
-        let items = get_completions(&doc, "file:///test.brs", pos, &index);
+        let items = get_completions(&doc, "file:///test.brs", pos, &index, &layout_index);
         // Should have statements + keywords + builtins + local vars + local fns
         assert!(items.len() > 100);
     }
@@ -861,8 +908,7 @@ mod tests {
     fn builtin_completions_have_data() {
         let items = builtin_function_completions();
         let val = items.iter().find(|i| i.label == "Val").unwrap();
-        let data: CompletionData =
-            serde_json::from_value(val.data.clone().unwrap()).unwrap();
+        let data: CompletionData = serde_json::from_value(val.data.clone().unwrap()).unwrap();
         assert!(matches!(data, CompletionData::Builtin { ref name, .. } if name == "Val"));
     }
 
@@ -925,11 +971,7 @@ mod tests {
         );
     }
 
-    fn make_test_def(
-        name: &str,
-        is_library: bool,
-        is_import_only: bool,
-    ) -> extract::FunctionDef {
+    fn make_test_def(name: &str, is_library: bool, is_import_only: bool) -> extract::FunctionDef {
         extract::FunctionDef {
             name: name.to_string(),
             range: Range::default(),

@@ -122,7 +122,12 @@ fn infer_params(call_node: &Node, source: &str) -> Vec<ParamInfo> {
 }
 
 /// Try to infer a parameter name from a simple variable reference argument.
-fn infer_param_name(arg_node: Node, source: &[u8], _index: usize, _kind: ParamKind) -> Option<String> {
+fn infer_param_name(
+    arg_node: Node,
+    source: &[u8],
+    _index: usize,
+    _kind: ParamKind,
+) -> Option<String> {
     // Walk: argument → expression → typed_expression → identifier/reference
     let expr = arg_node.named_child(0)?;
     if expr.kind() != "expression" {
@@ -231,7 +236,11 @@ fn generate_stub(fn_name: &str, params: &[ParamInfo], start_ln: i64) -> String {
     let params_str = if params.is_empty() {
         String::new()
     } else {
-        let param_list: String = params.iter().map(format_param).collect::<Vec<_>>().join(",");
+        let param_list: String = params
+            .iter()
+            .map(format_param)
+            .collect::<Vec<_>>()
+            .join(",");
         format!("({param_list})")
     };
 
@@ -272,11 +281,7 @@ mod tests {
         let uri = Url::parse("file:///test.brs").unwrap();
 
         // Find the function name range
-        let results = parser::run_query(
-            "(function_name) @fn",
-            tree.root_node(),
-            source,
-        );
+        let results = parser::run_query("(function_name) @fn", tree.root_node(), source);
         let fn_result = results.iter().find(|r| r.text == "fnFoo").unwrap();
         let diag = make_undefined_diagnostic(fn_result.range, "fnFoo");
 
@@ -300,11 +305,7 @@ mod tests {
         let tree = parse(source);
         let uri = Url::parse("file:///test.brs").unwrap();
 
-        let results = parser::run_query(
-            "(function_name) @fn",
-            tree.root_node(),
-            source,
-        );
+        let results = parser::run_query("(function_name) @fn", tree.root_node(), source);
         let fn_result = results.iter().find(|r| r.text == "fnBar$").unwrap();
         let diag = make_undefined_diagnostic(fn_result.range, "fnBar$");
 
@@ -315,7 +316,10 @@ mod tests {
         let new_text = &edits[0].new_text;
 
         assert!(new_text.contains("DEF fnBar$(Name$)"));
-        assert!(new_text.contains("LET fnBar$=\"\""), "string function should default to empty string, got: {new_text}");
+        assert!(
+            new_text.contains("LET fnBar$=\"\""),
+            "string function should default to empty string, got: {new_text}"
+        );
         assert!(new_text.contains("FNEND"));
     }
 
@@ -325,11 +329,7 @@ mod tests {
         let tree = parse(source);
         let uri = Url::parse("file:///test.brs").unwrap();
 
-        let results = parser::run_query(
-            "(function_name) @fn",
-            tree.root_node(),
-            source,
-        );
+        let results = parser::run_query("(function_name) @fn", tree.root_node(), source);
         let fn_result = results.iter().find(|r| r.text == "fnCalc").unwrap();
         let diag = make_undefined_diagnostic(fn_result.range, "fnCalc");
 
@@ -339,9 +339,18 @@ mod tests {
         let edits = changes.get(&uri).unwrap();
         let new_text = &edits[0].new_text;
 
-        assert!(new_text.contains("Count"), "should use variable name Count: {new_text}");
-        assert!(new_text.contains("Name$"), "should use variable name Name$: {new_text}");
-        assert!(new_text.contains("Mat Items$"), "should use Mat array name: {new_text}");
+        assert!(
+            new_text.contains("Count"),
+            "should use variable name Count: {new_text}"
+        );
+        assert!(
+            new_text.contains("Name$"),
+            "should use variable name Name$: {new_text}"
+        );
+        assert!(
+            new_text.contains("Mat Items$"),
+            "should use Mat array name: {new_text}"
+        );
     }
 
     #[test]
@@ -350,11 +359,7 @@ mod tests {
         let tree = parse(source);
         let uri = Url::parse("file:///test.brs").unwrap();
 
-        let results = parser::run_query(
-            "(function_name) @fn",
-            tree.root_node(),
-            source,
-        );
+        let results = parser::run_query("(function_name) @fn", tree.root_node(), source);
         let fn_result = results.iter().find(|r| r.text == "fnFoo").unwrap();
         let diag = make_undefined_diagnostic(fn_result.range, "fnFoo");
 
@@ -364,8 +369,14 @@ mod tests {
         let edits = changes.get(&uri).unwrap();
         let new_text = &edits[0].new_text;
 
-        assert!(new_text.contains("Param1"), "expression arg should get generic name: {new_text}");
-        assert!(new_text.contains("Param2$"), "string expression arg should get $ suffix: {new_text}");
+        assert!(
+            new_text.contains("Param1"),
+            "expression arg should get generic name: {new_text}"
+        );
+        assert!(
+            new_text.contains("Param2$"),
+            "string expression arg should get $ suffix: {new_text}"
+        );
     }
 
     #[test]
@@ -427,11 +438,7 @@ mod tests {
         let tree = parse(source);
         let uri = Url::parse("file:///test.brs").unwrap();
 
-        let results = parser::run_query(
-            "(function_name) @fn",
-            tree.root_node(),
-            source,
-        );
+        let results = parser::run_query("(function_name) @fn", tree.root_node(), source);
         let fn_result = results.iter().find(|r| r.text == "fnFoo").unwrap();
         let diag = make_undefined_diagnostic(fn_result.range, "fnFoo");
 
@@ -442,10 +449,16 @@ mod tests {
         let new_text = &edits[0].new_text;
 
         // Last line is 100, so stub should start at 110
-        assert!(new_text.contains("00110 DEF"), "stub should start at 00110: {new_text}");
+        assert!(
+            new_text.contains("00110 DEF"),
+            "stub should start at 00110: {new_text}"
+        );
         assert!(new_text.contains("00120 !"), "comment at 00120: {new_text}");
         assert!(new_text.contains("00130 LET"), "let at 00130: {new_text}");
-        assert!(new_text.contains("00140 FNEND"), "fnend at 00140: {new_text}");
+        assert!(
+            new_text.contains("00140 FNEND"),
+            "fnend at 00140: {new_text}"
+        );
     }
 
     #[test]

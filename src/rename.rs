@@ -18,7 +18,12 @@ pub struct PrepareRenameResult {
     pub placeholder: String,
 }
 
-fn resolve_node<'a>(tree: &'a Tree, _source: &str, line: usize, character: usize) -> Option<tree_sitter::Node<'a>> {
+fn resolve_node<'a>(
+    tree: &'a Tree,
+    _source: &str,
+    line: usize,
+    character: usize,
+) -> Option<tree_sitter::Node<'a>> {
     let mut node = node_at_position(tree, line, character)?;
 
     // End-of-token fallback (same as find_references)
@@ -215,10 +220,7 @@ mod tests {
         let result = prepare_rename(&tree, source, 0, 0).unwrap();
         assert_eq!(result.placeholder, "MYLOOP");
         // Range should be 6 chars wide (no colon)
-        assert_eq!(
-            result.range.end.character - result.range.start.character,
-            6
-        );
+        assert_eq!(result.range.end.character - result.range.start.character, 6);
     }
 
     #[test]

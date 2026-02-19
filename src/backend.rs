@@ -28,7 +28,14 @@ use crate::semantic_tokens;
 use crate::symbols;
 use crate::workspace::{self, WorkspaceIndex};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentKind {
+    Br,
+    Layout,
+}
+
 pub struct DocumentState {
+    pub kind: DocumentKind,
     pub rope: Rope,
     pub source: String,
     pub tree: Option<Tree>,
@@ -58,6 +65,7 @@ pub struct Backend {
     pub document_map: Arc<DashMap<String, DocumentState>>,
     pub parser: Mutex<tree_sitter::Parser>,
     pub workspace_index: Arc<tokio::sync::RwLock<WorkspaceIndex>>,
+    pub layout_index: Arc<tokio::sync::RwLock<crate::layout::LayoutIndex>>,
     pub workspace_folders: Arc<tokio::sync::RwLock<Vec<Url>>>,
     pub indexing_complete: Arc<AtomicBool>,
     pub diagnostics_generation: Arc<DashMap<String, Arc<AtomicU64>>>,
@@ -67,6 +75,7 @@ pub struct Backend {
 struct TextDocumentItem {
     uri: Url,
     text: String,
+    language_id: String,
 }
 
 /// Apply one incremental LSP change to the rope and source string, returning
@@ -117,6 +126,13 @@ fn apply_change(rope: &mut Rope, source: &mut String, range: &Range, new_text: &
 }
 
 impl Backend {
+    fn is_layout_doc(&self, uri: &str) -> bool {
+        self.document_map
+            .get(uri)
+            .map(|d| d.kind == DocumentKind::Layout)
+            .unwrap_or(false)
+    }
+
     async fn pull_diagnostics_config(&self) {
         let items = vec![ConfigurationItem {
             scope_uri: None,
@@ -213,6 +229,39 @@ impl Backend {
     }
 
     async fn on_change(&self, params: TextDocumentItem) {
+        let kind = if params.language_id == "lay" {
+            DocumentKind::Layout
+        } else {
+            DocumentKind::Br
+        };
+
+        if kind == DocumentKind::Layout {
+            let rope = Rope::from_str(&params.text);
+            let uri_string = params.uri.to_string();
+
+            // Parse layout and update layout index
+            if let Some(layout) = crate::layout::parse(&params.text) {
+                let mut idx = self.layout_index.write().await;
+                idx.update(&uri_string, layout);
+            }
+
+            self.document_map.insert(
+                uri_string,
+                DocumentState {
+                    kind,
+                    rope,
+                    source: params.text,
+                    tree: None,
+                },
+            );
+
+            // Publish empty diagnostics for layout files
+            self.client
+                .publish_diagnostics(params.uri, vec![], None)
+                .await;
+            return;
+        }
+
         let start = std::time::Instant::now();
         let rope = Rope::from_str(&params.text);
 
@@ -245,6 +294,7 @@ impl Backend {
         self.document_map.insert(
             uri_string,
             DocumentState {
+                kind,
                 rope,
                 source: params.text.clone(),
                 tree,
@@ -393,7 +443,8 @@ impl Backend {
             let uri_string = entry.key().clone();
             open_uris.insert(uri_string.clone());
             if let Some(tree) = entry.value().tree.as_ref() {
-                let refs = references::find_function_refs_by_name(name, tree, &entry.value().source);
+                let refs =
+                    references::find_function_refs_by_name(name, tree, &entry.value().source);
                 if let Ok(uri) = Url::parse(&uri_string) {
                     for range in refs {
                         locations.push(Location {
@@ -436,11 +487,19 @@ impl Backend {
                         let source = workspace::read_br_file(file_path).ok()?;
                         let mut parser = parser::new_parser();
                         let tree = parser::parse(&mut parser, &source, None)?;
-                        let refs = references::find_function_refs_by_name(&name_owned, &tree, &source);
+                        let refs =
+                            references::find_function_refs_by_name(&name_owned, &tree, &source);
                         if refs.is_empty() {
                             return None;
                         }
-                        Some(refs.into_iter().map(|range| Location { uri: uri.clone(), range }).collect::<Vec<_>>())
+                        Some(
+                            refs.into_iter()
+                                .map(|range| Location {
+                                    uri: uri.clone(),
+                                    range,
+                                })
+                                .collect::<Vec<_>>(),
+                        )
                     })
                     .flatten()
                     .collect();
@@ -490,8 +549,7 @@ impl Backend {
                 let mut ts_parser = parser::new_parser();
                 let tree = parser::parse(&mut ts_parser, &source, None)?;
 
-                let diags =
-                    Self::collect_all_diagnostics(&tree, &source, config, None);
+                let diags = Self::collect_all_diagnostics(&tree, &source, config, None);
 
                 let uri = Url::from_file_path(file_path).ok()?;
                 Some((uri, diags))
@@ -582,7 +640,7 @@ impl LanguageServer for Backend {
     async fn initialized(&self, _: InitializedParams) {
         debug!("initialized!");
 
-        // Register file watcher for .brs and .wbs files
+        // Register file watcher for .brs, .wbs, .lay, and filelay/* files
         let registrations = vec![Registration {
             id: "br-file-watcher".to_string(),
             method: "workspace/didChangeWatchedFiles".to_string(),
@@ -595,6 +653,14 @@ impl LanguageServer for Backend {
                         },
                         FileSystemWatcher {
                             glob_pattern: GlobPattern::String("**/*.wbs".to_string()),
+                            kind: Some(WatchKind::all()),
+                        },
+                        FileSystemWatcher {
+                            glob_pattern: GlobPattern::String("**/*.lay".to_string()),
+                            kind: Some(WatchKind::all()),
+                        },
+                        FileSystemWatcher {
+                            glob_pattern: GlobPattern::String("**/filelay/*".to_string()),
                             kind: Some(WatchKind::all()),
                         },
                     ],
@@ -613,6 +679,7 @@ impl LanguageServer for Backend {
         // Spawn background workspace scan
         let folders = self.workspace_folders.read().await.clone();
         let index = self.workspace_index.clone();
+        let layout_index = self.layout_index.clone();
         let client = self.client.clone();
         let indexing_complete = self.indexing_complete.clone();
         let document_map = self.document_map.clone();
@@ -658,9 +725,20 @@ impl LanguageServer for Backend {
                 total += count;
             }
 
+            // Scan for layout files
+            let mut layout_count = 0usize;
+            for folder in &folders {
+                let layouts = crate::layout::scan_workspace_layouts(folder);
+                layout_count += layouts.len();
+                let mut lidx = layout_index.write().await;
+                for (uri, layout) in layouts {
+                    lidx.add(&uri, layout);
+                }
+            }
+
             let elapsed = start.elapsed();
             let summary = format!(
-                "scanned {total_files_scanned} files, {total} contain definitions ({elapsed:.1?})"
+                "scanned {total_files_scanned} files, {total} contain definitions, {layout_count} layouts ({elapsed:.1?})"
             );
 
             // End progress
@@ -695,12 +773,8 @@ impl LanguageServer for Backend {
                         let uri_string = entry.key().clone();
                         let doc = entry.value();
                         let t = doc.tree.as_ref()?;
-                        let diags = Backend::collect_all_diagnostics(
-                            t,
-                            &doc.source,
-                            &config,
-                            Some(&idx),
-                        );
+                        let diags =
+                            Backend::collect_all_diagnostics(t, &doc.source, &config, Some(&idx));
                         Some((uri_string, diags))
                     })
                     .collect()
@@ -722,6 +796,7 @@ impl LanguageServer for Backend {
         self.on_change(TextDocumentItem {
             uri: params.text_document.uri,
             text: params.text_document.text,
+            language_id: params.text_document.language_id,
         })
         .await;
         debug!("file opened!");
@@ -734,22 +809,58 @@ impl LanguageServer for Backend {
         let change_count = params.content_changes.len();
 
         let Some(mut doc) = self.document_map.get_mut(&uri_string) else {
-            // Document not in map — fall back to full parse
+            // Document not in map — fall back to full parse with inferred language
             if let Some(change) = params.content_changes.into_iter().last() {
+                let lang = if uri.path().ends_with(".lay") || uri.path().contains("/filelay/") {
+                    "lay"
+                } else {
+                    "br"
+                };
                 self.on_change(TextDocumentItem {
                     uri,
                     text: change.text,
+                    language_id: lang.to_string(),
                 })
                 .await;
             }
             return;
         };
 
+        // Layout documents: just update source/rope and layout index
+        if doc.kind == DocumentKind::Layout {
+            let DocumentState {
+                ref mut rope,
+                ref mut source,
+                ..
+            } = *doc;
+            for change in params.content_changes {
+                match change.range {
+                    Some(range) => {
+                        apply_change(rope, source, &range, &change.text);
+                    }
+                    None => {
+                        *rope = Rope::from_str(&change.text);
+                        *source = change.text;
+                    }
+                }
+            }
+
+            let source = doc.source.clone();
+            drop(doc);
+
+            if let Some(layout) = crate::layout::parse(&source) {
+                let mut idx = self.layout_index.write().await;
+                idx.update(&uri_string, layout);
+            }
+            return;
+        }
+
         // Apply each incremental change
         let DocumentState {
             ref mut rope,
             ref mut source,
             ref mut tree,
+            ..
         } = *doc;
 
         let had_old_tree = tree.is_some();
@@ -787,7 +898,13 @@ impl LanguageServer for Backend {
 
         let total_elapsed = start.elapsed();
 
-        let mode = if incremental { "incremental" } else if had_old_tree { "full (tree reset)" } else { "full (no prior tree)" };
+        let mode = if incremental {
+            "incremental"
+        } else if had_old_tree {
+            "full (tree reset)"
+        } else {
+            "full (no prior tree)"
+        };
         self.client
             .log_message(
                 MessageType::LOG,
@@ -807,7 +924,16 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
+        let was_layout = self
+            .document_map
+            .get(&uri)
+            .map(|d| d.kind == DocumentKind::Layout)
+            .unwrap_or(false);
         self.document_map.remove(&uri);
+        if was_layout {
+            let mut idx = self.layout_index.write().await;
+            idx.remove(&uri);
+        }
         self.client
             .publish_diagnostics(params.text_document.uri, vec![], None)
             .await;
@@ -819,9 +945,14 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri.to_string();
         let position = params.text_document_position.position;
 
+        if self.is_layout_doc(&uri) {
+            return Ok(None);
+        }
+
         let index = self.workspace_index.read().await;
+        let layout_index = self.layout_index.read().await;
         let items = match self.document_map.get(&uri) {
-            Some(doc) => completions::get_completions(&doc, &uri, position, &index),
+            Some(doc) => completions::get_completions(&doc, &uri, position, &index, &layout_index),
             None => return Ok(None),
         };
 
@@ -855,9 +986,7 @@ impl LanguageServer for Backend {
         let docs = match data {
             completions::CompletionData::Builtin { ref name, overload } => {
                 let entries = builtins::lookup(name);
-                entries
-                    .get(overload)
-                    .map(completions::format_builtin_docs)
+                entries.get(overload).map(completions::format_builtin_docs)
             }
             completions::CompletionData::Local { ref name, ref uri } => {
                 self.document_map.get(uri).and_then(|doc| {
@@ -892,6 +1021,10 @@ impl LanguageServer for Backend {
         let uri_string = uri.to_string();
         let position = params.text_document_position.position;
 
+        if self.is_layout_doc(&uri_string) {
+            return Ok(None);
+        }
+
         // Check if cursor is on a user function name (cross-file candidate)
         let fn_name = self.document_map.get(&uri_string).and_then(|doc| {
             let tree = doc.tree.as_ref()?;
@@ -914,7 +1047,10 @@ impl LanguageServer for Backend {
             self.client
                 .log_message(
                     MessageType::LOG,
-                    format!("references (cross-file, \"{name}\"): {count} locations ({:.1?})", start.elapsed()),
+                    format!(
+                        "references (cross-file, \"{name}\"): {count} locations ({:.1?})",
+                        start.elapsed()
+                    ),
                 )
                 .await;
             if locations.is_empty() {
@@ -950,7 +1086,10 @@ impl LanguageServer for Backend {
         self.client
             .log_message(
                 MessageType::LOG,
-                format!("references (local): {count} locations ({:.1?})", start.elapsed()),
+                format!(
+                    "references (local): {count} locations ({:.1?})",
+                    start.elapsed()
+                ),
             )
             .await;
 
@@ -967,6 +1106,10 @@ impl LanguageServer for Backend {
             .uri
             .to_string();
         let position = params.text_document_position_params.position;
+
+        if self.is_layout_doc(&uri_string) {
+            return Ok(None);
+        }
 
         let highlights = self.document_map.get(&uri_string).and_then(|doc| {
             let tree = doc.tree.as_ref()?;
@@ -998,6 +1141,9 @@ impl LanguageServer for Backend {
         params: TextDocumentPositionParams,
     ) -> Result<Option<PrepareRenameResponse>> {
         let uri_string = params.text_document.uri.to_string();
+        if self.is_layout_doc(&uri_string) {
+            return Ok(None);
+        }
         let result = self.document_map.get(&uri_string).and_then(|doc| {
             let tree = doc.tree.as_ref()?;
             let r = rename::prepare_rename(
@@ -1019,6 +1165,10 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri.clone();
         let uri_string = uri.to_string();
         let position = params.text_document_position.position;
+
+        if self.is_layout_doc(&uri_string) {
+            return Ok(None);
+        }
 
         // Check if cursor is on a user function name (cross-file candidate)
         let fn_name = self.document_map.get(&uri_string).and_then(|doc| {
@@ -1118,6 +1268,9 @@ impl LanguageServer for Backend {
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri;
         let uri_string = uri.to_string();
+        if self.is_layout_doc(&uri_string) {
+            return Ok(None);
+        }
         let doc = match self.document_map.get(&uri_string) {
             Some(d) => d,
             None => return Ok(None),
@@ -1148,9 +1301,17 @@ impl LanguageServer for Backend {
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
         let start = std::time::Instant::now();
-        let uri = params.text_document_position_params.text_document.uri.clone();
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
         let uri_string = uri.to_string();
         let position = params.text_document_position_params.position;
+
+        if self.is_layout_doc(&uri_string) {
+            return Ok(None);
+        }
 
         let result = self.document_map.get(&uri_string).and_then(|doc| {
             let tree = doc.tree.as_ref()?;
@@ -1176,8 +1337,22 @@ impl LanguageServer for Backend {
                 })))
             }
             Some(definition::DefinitionResult::LookupFunction(name)) => {
+                // Extract library links from the current doc's tree before awaiting locks
+                let library_links = self
+                    .document_map
+                    .get(&uri_string)
+                    .and_then(|doc| {
+                        let tree = doc.tree.as_ref()?;
+                        Some(extract::extract_library_links(tree, &doc.source))
+                    })
+                    .unwrap_or_default();
+
+                let folders = self.workspace_folders.read().await;
                 let index = self.workspace_index.read().await;
-                let def = index.lookup_best(&name, &uri_string);
+                let def = index
+                    .lookup_prioritized_with_links(&name, &uri_string, &library_links, &folders)
+                    .into_iter()
+                    .next();
                 if let Some(def) = def {
                     self.client
                         .log_message(
@@ -1217,6 +1392,9 @@ impl LanguageServer for Backend {
     ) -> Result<Option<DocumentSymbolResponse>> {
         let start = std::time::Instant::now();
         let uri_string = params.text_document.uri.to_string();
+        if self.is_layout_doc(&uri_string) {
+            return Ok(None);
+        }
         let result = self.document_map.get(&uri_string).and_then(|doc| {
             let tree = doc.tree.as_ref()?;
             Some(symbols::collect_document_symbols(tree, &doc.source))
@@ -1226,7 +1404,11 @@ impl LanguageServer for Backend {
                 self.client
                     .log_message(
                         MessageType::LOG,
-                        format!("document_symbol: {} symbols ({:.1?})", syms.len(), start.elapsed()),
+                        format!(
+                            "document_symbol: {} symbols ({:.1?})",
+                            syms.len(),
+                            start.elapsed()
+                        ),
                     )
                     .await;
                 Ok(Some(DocumentSymbolResponse::Nested(syms)))
@@ -1241,12 +1423,15 @@ impl LanguageServer for Backend {
     ) -> Result<Option<SemanticTokensResult>> {
         let start = std::time::Instant::now();
         let uri = params.text_document.uri.to_string();
-        let tokens = self.document_map.get(&uri).and_then(|doc| {
-            let tree = doc.tree.as_ref()?;
-            Some(semantic_tokens::collect_tokens(tree, &doc.source))
+        let tokens = self.document_map.get(&uri).map(|doc| match doc.kind {
+            DocumentKind::Layout => crate::layout::collect_layout_tokens(&doc.source),
+            DocumentKind::Br => match doc.tree.as_ref() {
+                Some(tree) => semantic_tokens::collect_tokens(tree, &doc.source),
+                None => Vec::new(),
+            },
         });
         let result = match tokens {
-            Some(t) => {
+            Some(t) if !t.is_empty() => {
                 let count = t.len();
                 self.client
                     .log_message(
@@ -1259,7 +1444,7 @@ impl LanguageServer for Backend {
                     data: t,
                 })))
             }
-            None => Ok(None),
+            _ => Ok(None),
         };
         result
     }
@@ -1272,60 +1457,88 @@ impl LanguageServer for Backend {
             .to_string();
         let position = params.text_document_position_params.position;
 
-        let doc = match self.document_map.get(&uri_string) {
-            Some(d) => d,
-            None => return Ok(None),
-        };
-        let tree = match doc.tree.as_ref() {
-            Some(t) => t,
-            None => return Ok(None),
-        };
-
-        // Find function_name node at cursor
-        let mut node = match parser::node_at_position(
-            tree,
-            position.line as usize,
-            position.character as usize,
-        ) {
-            Some(n) => n,
-            None => return Ok(None),
-        };
-
-        // Walk up to find a function_name node
-        loop {
-            if node.kind() == "function_name" {
-                break;
-            }
-            match node.parent() {
-                Some(p) => node = p,
-                None => return Ok(None),
-            }
+        if self.is_layout_doc(&uri_string) {
+            return Ok(None);
         }
 
-        let fn_name = match node.utf8_text(doc.source.as_bytes()) {
-            Ok(s) => s,
-            Err(_) => return Ok(None),
-        };
-        let fn_name_range = parser::node_range(node);
+        // Extract everything we need from the DashMap ref, then drop it
+        enum HoverKind {
+            Builtin(String),
+            User(String, std::collections::HashMap<String, String>),
+        }
 
-        // Check parent to determine if system or user function
-        let parent = match node.parent() {
-            Some(p) => p,
-            None => return Ok(None),
-        };
+        let (hover_kind, fn_name_range) = {
+            let doc = match self.document_map.get(&uri_string) {
+                Some(d) => d,
+                None => return Ok(None),
+            };
+            let tree = match doc.tree.as_ref() {
+                Some(t) => t,
+                None => return Ok(None),
+            };
 
-        let markdown = match parent.kind() {
-            "numeric_system_function" | "string_system_function" => {
+            // Find function_name node at cursor
+            let mut node = match parser::node_at_position(
+                tree,
+                position.line as usize,
+                position.character as usize,
+            ) {
+                Some(n) => n,
+                None => return Ok(None),
+            };
+
+            // Walk up to find a function_name node
+            loop {
+                if node.kind() == "function_name" {
+                    break;
+                }
+                match node.parent() {
+                    Some(p) => node = p,
+                    None => return Ok(None),
+                }
+            }
+
+            let fn_name = match node.utf8_text(doc.source.as_bytes()) {
+                Ok(s) => s.to_string(),
+                Err(_) => return Ok(None),
+            };
+            let fn_name_range = parser::node_range(node);
+
+            let parent = match node.parent() {
+                Some(p) => p,
+                None => return Ok(None),
+            };
+
+            let kind = match parent.kind() {
+                "numeric_system_function" | "string_system_function" => {
+                    HoverKind::Builtin(fn_name)
+                }
+                _ => {
+                    let library_links = extract::extract_library_links(tree, &doc.source);
+                    HoverKind::User(fn_name, library_links)
+                }
+            };
+
+            (kind, fn_name_range)
+        }; // doc dropped here
+
+        let markdown = match hover_kind {
+            HoverKind::Builtin(ref fn_name) => {
                 let builtins = builtins::lookup(fn_name);
                 if builtins.is_empty() {
                     return Ok(None);
                 }
                 format_builtin_hover(builtins)
             }
-            _ => {
-                // User function — look up in workspace index
+            HoverKind::User(ref fn_name, ref library_links) => {
+                let folders = self.workspace_folders.read().await;
                 let index = self.workspace_index.read().await;
-                let defs = index.lookup_prioritized(fn_name, &uri_string);
+                let defs = index.lookup_prioritized_with_links(
+                    fn_name,
+                    &uri_string,
+                    library_links,
+                    &folders,
+                );
                 if defs.is_empty() {
                     return Ok(None);
                 }
@@ -1349,6 +1562,10 @@ impl LanguageServer for Backend {
             .uri
             .to_string();
         let position = params.text_document_position_params.position;
+
+        if self.is_layout_doc(&uri_string) {
+            return Ok(None);
+        }
 
         let doc = match self.document_map.get(&uri_string) {
             Some(d) => d,
@@ -1416,13 +1633,31 @@ impl LanguageServer for Backend {
             None => return Ok(None),
         };
 
+        // Extract library links before dropping the DashMap ref
+        let library_links = doc
+            .tree
+            .as_ref()
+            .map(|tree| extract::extract_library_links(tree, &doc.source))
+            .unwrap_or_default();
+        drop(doc);
+
         let signatures = {
             let builtins = builtins::lookup(&call_ctx.name);
             if !builtins.is_empty() {
                 build_builtin_signatures(builtins, call_ctx.active_param)
             } else {
+                let folders = self.workspace_folders.read().await;
                 let index = self.workspace_index.read().await;
-                match index.lookup_best(&call_ctx.name, &uri_string) {
+                match index
+                    .lookup_prioritized_with_links(
+                        &call_ctx.name,
+                        &uri_string,
+                        &library_links,
+                        &folders,
+                    )
+                    .into_iter()
+                    .next()
+                {
                     Some(d) => build_user_signatures(&d.def, call_ctx.active_param),
                     None => return Ok(None),
                 }
@@ -1515,39 +1750,60 @@ impl LanguageServer for Backend {
         debug!("watched files have changed!");
 
         for change in params.changes {
+            let file_path = match change.uri.to_file_path() {
+                Ok(p) => p,
+                Err(()) => continue,
+            };
+
+            let is_layout = crate::layout::is_layout_file(&file_path);
+
             match change.typ {
                 FileChangeType::DELETED => {
-                    let mut index = self.workspace_index.write().await;
-                    index.remove_file(&change.uri);
+                    if is_layout {
+                        let mut idx = self.layout_index.write().await;
+                        idx.remove(change.uri.as_ref());
+                    } else {
+                        let mut index = self.workspace_index.write().await;
+                        index.remove_file(&change.uri);
+                    }
                 }
                 FileChangeType::CREATED | FileChangeType::CHANGED => {
                     // Skip if the file is currently open — editor content takes precedence
-                    if self.document_map.contains_key(&change.uri.to_string()) {
+                    if self.document_map.contains_key(change.uri.as_str()) {
                         continue;
                     }
 
-                    let file_path = match change.uri.to_file_path() {
-                        Ok(p) => p,
-                        Err(()) => continue,
-                    };
-
-                    let source = match workspace::read_br_file(&file_path) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            error!("Failed to read {}: {e}", file_path.display());
-                            continue;
+                    if is_layout {
+                        let source = match crate::layout::read_layout_file(&file_path) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                error!("Failed to read layout {}: {e}", file_path.display());
+                                continue;
+                            }
+                        };
+                        if let Some(layout) = crate::layout::parse(&source) {
+                            let mut idx = self.layout_index.write().await;
+                            idx.update(change.uri.as_ref(), layout);
                         }
-                    };
+                    } else {
+                        let source = match workspace::read_br_file(&file_path) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                error!("Failed to read {}: {e}", file_path.display());
+                                continue;
+                            }
+                        };
 
-                    let tree = {
-                        let mut parser = self.parser.lock().unwrap();
-                        parser::parse(&mut parser, &source, None)
-                    };
+                        let tree = {
+                            let mut parser = self.parser.lock().unwrap();
+                            parser::parse(&mut parser, &source, None)
+                        };
 
-                    if let Some(t) = tree {
-                        let defs = extract::extract_definitions(&t, &source);
-                        let mut index = self.workspace_index.write().await;
-                        index.update_file(&change.uri, defs);
+                        if let Some(t) = tree {
+                            let defs = extract::extract_definitions(&t, &source);
+                            let mut index = self.workspace_index.write().await;
+                            index.update_file(&change.uri, defs);
+                        }
                     }
                 }
                 _ => {}
@@ -1781,7 +2037,7 @@ fn format_user_hover_multi(defs: &[&workspace::IndexedFunctionDef]) -> String {
                 md
             })
             .collect::<Vec<_>>()
-            .join("\n\n---\n\n&nbsp;\n\n"),
+            .join("\n\n---\n\n"),
     }
 }
 

@@ -51,6 +51,12 @@
           ".wbs"
         ],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "lay",
+        "aliases": ["Fileio Layout"],
+        "extensions": [".lay"],
+        "filenamePatterns": ["**/filelay/*"]
       }
     ],
     "grammars": [
@@ -120,6 +126,12 @@
           "enumMember": ["keyword.errorcondition.br"],
           "operator": ["keyword.operator.mathematical.br"],
           "lineNumber": ["linenumber.br"]
+        }
+      },
+      {
+        "language": "lay",
+        "scopes": {
+          "invalid": ["invalid"]
         }
       }
     ],
@@ -194,7 +206,8 @@
     }
   },
   "activationEvents": [
-    "onLanguage:br"
+    "onLanguage:br",
+    "onLanguage:lay"
   ],
   "engines": {
     "vscode": "^1.66.0"

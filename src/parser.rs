@@ -115,8 +115,7 @@ pub fn find_function_call_context(source: &str, row: usize, col: usize) -> Optio
                     if name_start == name_end {
                         return None; // no identifier before `(`
                     }
-                    let name =
-                        String::from_utf8_lossy(&bytes[name_start..name_end]).to_string();
+                    let name = String::from_utf8_lossy(&bytes[name_start..name_end]).to_string();
                     return Some(CallContext {
                         name,
                         active_param: comma_count,
