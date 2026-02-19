@@ -12,4 +12,5 @@ Cargo.lock
 examples/
 justfile
 rust-toolchains.toml
+Lexi/tmp/*
 

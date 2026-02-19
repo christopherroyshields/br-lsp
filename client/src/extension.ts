@@ -1,11 +1,16 @@
 import { commands, Uri, workspace, ExtensionContext, window } from "vscode";
 
+import { activateCompile } from "./compile";
 import { activateLineNumbers } from "./line-numbers";
 import { activateNextPrev } from "./next-prev";
 import {
   Executable,
   LanguageClient,
   LanguageClientOptions,
+  CloseHandlerResult,
+  ErrorHandlerResult,
+  ErrorAction,
+  CloseAction,
   ServerOptions,
 } from "vscode-languageclient/node";
 
@@ -44,6 +49,17 @@ export async function activate(context: ExtensionContext) {
     },
     outputChannel,
     traceOutputChannel,
+    errorHandler: {
+      error(_error: Error, _message: undefined, count: number): ErrorHandlerResult {
+        if (count <= 3) {
+          return { action: ErrorAction.Continue };
+        }
+        return { action: ErrorAction.Shutdown };
+      },
+      closed(): CloseHandlerResult {
+        return { action: CloseAction.Restart, message: "BR Language Server crashed. Restarting..." };
+      },
+    },
   };
 
   client = new LanguageClient(
@@ -81,6 +97,7 @@ export async function activate(context: ExtensionContext) {
   });
   context.subscriptions.push(scanAllCmd);
 
+  activateCompile(context);
   activateLineNumbers(context);
   activateNextPrev(context);
 }

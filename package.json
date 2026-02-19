@@ -88,6 +88,10 @@
       {
         "command": "br-lsp.autoInsertLineNumber",
         "title": "BR: Auto Insert Line Number"
+      },
+      {
+        "command": "br-lsp.compile",
+        "title": "BR: Compile Program"
       }
     ],
     "keybindings": [
@@ -103,6 +107,11 @@
       {
         "command": "br-lsp.prevOccurrence",
         "key": "ctrl+shift+up",
+        "when": "editorTextFocus && editorLangId == br"
+      },
+      {
+        "command": "br-lsp.compile",
+        "key": "ctrl+shift+b",
         "when": "editorTextFocus && editorLangId == br"
       },
       {
