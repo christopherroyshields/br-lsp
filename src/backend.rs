@@ -90,21 +90,27 @@ fn apply_change(rope: &mut Rope, source: &mut String, range: &Range, new_text: &
     let start_char = rope.line_to_char(start_line) + start_col;
     let end_char = rope.line_to_char(end_line) + end_col;
 
-    let start_byte = start_char; // ASCII: 1 byte per char
-    let old_end_byte = end_char;
-
+    // tree-sitter InputEdit and String::replace_range need byte offsets.
+    // LSP character offsets equal byte offsets only for ASCII; CP437 high
+    // bytes become multi-byte UTF-8 so we must convert via the rope.
+    let start_byte = rope.char_to_byte(start_char);
+    let old_end_byte = rope.char_to_byte(end_char);
     let new_end_byte = start_byte + new_text.len();
 
-    // Compute new_end_position by scanning new_text for newlines
+    // tree-sitter Point columns are byte offsets within the line.
+    let start_byte_col = start_byte - rope.char_to_byte(rope.line_to_char(start_line));
+    let old_end_byte_col = old_end_byte - rope.char_to_byte(rope.line_to_char(end_line));
+
+    // Compute new_end_position by scanning new_text (columns in bytes)
     let new_end_position = {
         let mut line = start_line;
-        let mut col = start_col;
+        let mut col = start_byte_col;
         for ch in new_text.chars() {
             if ch == '\n' {
                 line += 1;
                 col = 0;
             } else {
-                col += 1;
+                col += ch.len_utf8();
             }
         }
         Point::new(line, col)
@@ -119,8 +125,8 @@ fn apply_change(rope: &mut Rope, source: &mut String, range: &Range, new_text: &
         start_byte,
         old_end_byte,
         new_end_byte,
-        start_position: Point::new(start_line, start_col),
-        old_end_position: Point::new(end_line, end_col),
+        start_position: Point::new(start_line, start_byte_col),
+        old_end_position: Point::new(end_line, old_end_byte_col),
         new_end_position,
     }
 }
@@ -2179,5 +2185,33 @@ mod tests {
             incremental.root_node().to_sexp(),
             full.root_node().to_sexp()
         );
+    }
+
+    #[test]
+    fn apply_change_multibyte_utf8() {
+        // CP437 '║' (0xBA) becomes U+2551 in UTF-8 (3 bytes: E2 95 91)
+        let original = "A║B\n";
+        let mut rope = Rope::from_str(original);
+        let mut source = original.to_string();
+
+        assert_eq!(source.len(), 6); // A(1) + ║(3) + B(1) + \n(1)
+
+        // Replace 'B' (at line 0, col 2 in chars) with 'C'
+        let range = Range {
+            start: Position { line: 0, character: 2 },
+            end: Position { line: 0, character: 3 },
+        };
+        let edit = apply_change(&mut rope, &mut source, &range, "C");
+
+        assert_eq!(source, "A║C\n");
+        assert_eq!(rope.to_string(), "A║C\n");
+
+        // Byte offsets: A is at 0, ║ spans 1..4, B/C is at 4
+        assert_eq!(edit.start_byte, 4);
+        assert_eq!(edit.old_end_byte, 5);
+        assert_eq!(edit.new_end_byte, 5);
+        assert_eq!(edit.start_position, Point::new(0, 4));
+        assert_eq!(edit.old_end_position, Point::new(0, 5));
+        assert_eq!(edit.new_end_position, Point::new(0, 5));
     }
 }

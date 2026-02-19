@@ -25,8 +25,8 @@ impl BuiltinParam {
     /// - Literal string params (e.g. `"MD5"`) → None (skip type checking)
     /// - Ambiguous params (e.g. arrays without type indicator) → None
     pub fn kind(&self) -> Option<ParamKind> {
-        // Skip literal string params ("MD5", "KB")
-        if self.name.starts_with('"') {
+        // Skip literal string params ("MD5", "KB") and varargs marker
+        if self.name.starts_with('"') || self.name == "[...]" {
             return None;
         }
         // Strip wrapper chars for analysis

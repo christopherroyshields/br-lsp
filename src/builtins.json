@@ -598,11 +598,27 @@
     ]
   },
   {
+    "name": "Max$",
+    "documentation": "Finds the string with the greatest ASCII value of the given strings.",
+    "params": [
+      { "name": "<string$>" },
+      { "name": "[...]" }
+    ]
+  },
+  {
     "name": "Min",
     "documentation": "Returns the smallest numeric value in the set of numbers inside parentheses.",
     "params": [
       { "name": "<value>" },
       { "name": "<value>" },
+      { "name": "[...]" }
+    ]
+  },
+  {
+    "name": "Min$",
+    "documentation": "Finds the string with the smallest ASCII value of the given strings.",
+    "params": [
+      { "name": "<string$>" },
       { "name": "[...]" }
     ]
   },
