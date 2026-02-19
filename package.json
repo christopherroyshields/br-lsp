@@ -92,6 +92,10 @@
       {
         "command": "br-lsp.compile",
         "title": "BR: Compile Program"
+      },
+      {
+        "command": "br-lsp.toggleAutoCompile",
+        "title": "BR: Toggle Auto-Compile on Save"
       }
     ],
     "keybindings": [

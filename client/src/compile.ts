@@ -8,6 +8,9 @@ const LOADER = "/lib64/ld-linux-x86-64.so.2";
 const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]|\x1b[()][0-9A-Za-z]|\x1b\[\?[0-9;]*[A-Za-z]/g;
 
 let outputChannel: vscode.OutputChannel;
+let autoCompileState: Map<string, boolean> = new Map();
+let autoCompileStatusBarItem: vscode.StatusBarItem;
+let compiling = false;
 
 const EXT_MAP: Record<string, string> = {
   ".brs": ".br",
@@ -273,10 +276,38 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
   }
 }
 
+function toggleAutoCompile(): void {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.languageId !== "br") {
+    return;
+  }
+  const fileName = editor.document.fileName;
+  const current = autoCompileState.get(fileName) ?? false;
+  autoCompileState.set(fileName, !current);
+  updateStatusBar();
+}
+
+function updateStatusBar(): void {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.languageId !== "br") {
+    autoCompileStatusBarItem.hide();
+    return;
+  }
+  const enabled = autoCompileState.get(editor.document.fileName) ?? false;
+  autoCompileStatusBarItem.text = enabled ? "$(check) Auto-Compile" : "$(circle-slash) Auto-Compile";
+  autoCompileStatusBarItem.show();
+}
+
 export function activateCompile(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel("BR Compile");
+
+  autoCompileStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  autoCompileStatusBarItem.command = "br-lsp.toggleAutoCompile";
+  updateStatusBar();
+
   context.subscriptions.push(
     outputChannel,
+    autoCompileStatusBarItem,
     vscode.commands.registerCommand("br-lsp.compile", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
@@ -297,6 +328,25 @@ export function activateCompile(context: vscode.ExtensionContext) {
       }
 
       await compileBrProgram(filename, context);
+    }),
+    vscode.commands.registerCommand("br-lsp.toggleAutoCompile", toggleAutoCompile),
+    vscode.window.onDidChangeActiveTextEditor(() => updateStatusBar()),
+    vscode.workspace.onDidSaveTextDocument(async (document) => {
+      if (document.languageId !== "br") {
+        return;
+      }
+      if (!autoCompileState.get(document.fileName)) {
+        return;
+      }
+      if (compiling) {
+        return;
+      }
+      compiling = true;
+      try {
+        await compileBrProgram(document.fileName, context);
+      } finally {
+        compiling = false;
+      }
     }),
   );
 }
