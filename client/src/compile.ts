@@ -29,29 +29,19 @@ function ensureExecutable(filePath: string): void {
   }
 }
 
-function hasLineNumbers(filePath: string): boolean {
-  const content = fs.readFileSync(filePath, "latin1");
-  const firstLine = content.split(/\r?\n/).find((line) => line.trim().length > 0);
-  if (!firstLine) {
-    return false;
-  }
-  return /^\s*\d{3,5}\s/.test(firstLine);
-}
-
-function generatePrc(sourceBase: string, name: string, outputExt: string, needsLineNumbers: boolean): string {
-  // BR uses backslash paths internally even on Linux
+function generatePrc(sourceBase: string, name: string, outputExt: string): string {
+  // BR uses backslash paths internally even on Linux.
+  // Always run through linenum.brs which invokes the Lexi preprocessor
+  // (line continuation, backtick strings, #SELECT#/#CASE#, #DEFINE#, etc.)
+  // and adds line numbers. fnApplyLexi handles already-numbered files gracefully.
   let prc = "";
   prc += "proc noecho\n";
-  if (needsLineNumbers) {
-    prc += `00002 Infile$="tmp\\${sourceBase}"\n`;
-    prc += `00003 Outfile$="tmp\\tempfile"\n`;
-    prc += "subproc linenum.brs\n";
-    prc += "run\n";
-    prc += "clear\n";
-    prc += "subproc tmp\\tempfile\n";
-  } else {
-    prc += `subproc tmp\\${sourceBase}\n`;
-  }
+  prc += `00002 Infile$="tmp\\${sourceBase}"\n`;
+  prc += `00003 Outfile$="tmp\\tempfile"\n`;
+  prc += "subproc linenum.brs\n";
+  prc += "run\n";
+  prc += "clear\n";
+  prc += "subproc tmp\\tempfile\n";
   prc += `skip PROGRAM_REPLACE if exists("tmp\\${name}")\n`;
   prc += `skip PROGRAM_REPLACE if exists("tmp\\${name}${outputExt}")\n`;
   prc += `save "tmp\\${name}${outputExt}"\n`;
@@ -200,14 +190,11 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
     return;
   }
 
-  // Detect whether source needs line numbers added
-  const needsLineNumbers = !hasLineNumbers(tmpSourcePath);
-
-  outputChannel.appendLine(`Compiling ${parsed.base}${needsLineNumbers ? " (adding line numbers)" : ""}...`);
+  outputChannel.appendLine(`Compiling ${parsed.base}...`);
   outputChannel.show(true);
 
   // Generate and write .prc file
-  const prcContent = generatePrc(parsed.base, parsed.name, outputExt, needsLineNumbers);
+  const prcContent = generatePrc(parsed.base, parsed.name, outputExt);
   try {
     fs.writeFileSync(prcPath, prcContent);
   } catch (error: any) {
