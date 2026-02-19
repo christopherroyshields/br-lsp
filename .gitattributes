@@ -1,7 +1,9 @@
 * text=auto eol=lf
 
 Lexi/brlinux binary
+Lexi/brnative.exe binary
 Lexi/*.so binary
+Lexi/*.dll binary
 Lexi/*.dat binary
 Lexi/*.br binary
 Lexi/*.out binary

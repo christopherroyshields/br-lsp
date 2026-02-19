@@ -26,16 +26,29 @@ function ensureExecutable(filePath: string): void {
   }
 }
 
-function generatePrc(sourceBase: string, name: string, outputExt: string): string {
+function hasLineNumbers(filePath: string): boolean {
+  const content = fs.readFileSync(filePath, "latin1");
+  const firstLine = content.split(/\r?\n/).find((line) => line.trim().length > 0);
+  if (!firstLine) {
+    return false;
+  }
+  return /^\s*\d{3,5}\s/.test(firstLine);
+}
+
+function generatePrc(sourceBase: string, name: string, outputExt: string, needsLineNumbers: boolean): string {
   // BR uses backslash paths internally even on Linux
   let prc = "";
   prc += "proc noecho\n";
-  prc += `00002 Infile$="tmp\\${sourceBase}"\n`;
-  prc += `00003 Outfile$="tmp\\tempfile"\n`;
-  prc += "subproc linenum.brs\n";
-  prc += "run\n";
-  prc += "clear\n";
-  prc += "subproc tmp\\tempfile\n";
+  if (needsLineNumbers) {
+    prc += `00002 Infile$="tmp\\${sourceBase}"\n`;
+    prc += `00003 Outfile$="tmp\\tempfile"\n`;
+    prc += "subproc linenum.brs\n";
+    prc += "run\n";
+    prc += "clear\n";
+    prc += "subproc tmp\\tempfile\n";
+  } else {
+    prc += `subproc tmp\\${sourceBase}\n`;
+  }
   prc += `skip PROGRAM_REPLACE if exists("tmp\\${name}")\n`;
   prc += `skip PROGRAM_REPLACE if exists("tmp\\${name}${outputExt}")\n`;
   prc += `save "tmp\\${name}${outputExt}"\n`;
@@ -94,6 +107,67 @@ function runBrLinux(brlinuxPath: string, lexiPath: string): Promise<void> {
   });
 }
 
+function runBrWindows(brExePath: string, lexiPath: string): Promise<void> {
+  // Launch LexiTip to auto-dismiss the BR splash/license screen
+  const lexiTipPath = path.join(lexiPath, "LexiTip.exe");
+  if (fs.existsSync(lexiTipPath)) {
+    spawn(lexiTipPath, [], { cwd: lexiPath, detached: true, stdio: "ignore" }).unref();
+  }
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn(brExePath, ["proc", "convert.prc"], {
+      cwd: lexiPath,
+      stdio: "pipe",
+    });
+
+    let stderr = "";
+
+    proc.stdout?.on("data", (data: Buffer) => {
+      const cleaned = stripAnsi(data.toString())
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .join("\n");
+      if (cleaned) {
+        outputChannel.appendLine(cleaned);
+      }
+    });
+
+    proc.stderr?.on("data", (data: Buffer) => {
+      const text = data.toString();
+      stderr += text;
+      outputChannel.appendLine(text);
+    });
+
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(stderr || `brnative.exe exited with code ${code}`));
+      } else {
+        resolve();
+      }
+    });
+
+    proc.on("error", reject);
+  });
+}
+
+function runBr(context: vscode.ExtensionContext, lexiPath: string): Promise<void> {
+  if (process.platform === "win32") {
+    const brExePath = path.join(lexiPath, "brnative.exe");
+    if (!fs.existsSync(brExePath)) {
+      return Promise.reject(new Error("brnative.exe not found in Lexi/ directory. Please add the Windows BR runtime."));
+    }
+    return runBrWindows(brExePath, lexiPath);
+  } else {
+    const brlinuxPath = path.join(lexiPath, "brlinux");
+    if (!fs.existsSync(brlinuxPath)) {
+      return Promise.reject(new Error("brlinux not found in Lexi/ directory. Please add the Linux BR runtime."));
+    }
+    ensureExecutable(brlinuxPath);
+    return runBrLinux(brlinuxPath, lexiPath);
+  }
+}
+
 async function compileBrProgram(filename: string, context: vscode.ExtensionContext): Promise<void> {
   const parsed = path.parse(filename);
   const inputExt = parsed.ext.toLowerCase();
@@ -104,15 +178,11 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
   }
 
   const lexiPath = getLexiPath(context);
-  const brlinuxPath = path.join(lexiPath, "brlinux");
   const tmpDir = path.join(lexiPath, "tmp");
   const prcPath = path.join(lexiPath, "convert.prc");
   const tmpSourcePath = path.join(tmpDir, parsed.base);
   const outputFileName = parsed.name + outputExt;
   const finalOutputPath = path.join(parsed.dir, outputFileName);
-
-  // Ensure brlinux is executable (lazy, first compile only)
-  ensureExecutable(brlinuxPath);
 
   // Ensure tmp directory exists
   if (!fs.existsSync(tmpDir)) {
@@ -127,11 +197,14 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
     return;
   }
 
-  outputChannel.appendLine(`Compiling ${parsed.base}...`);
+  // Detect whether source needs line numbers added
+  const needsLineNumbers = !hasLineNumbers(tmpSourcePath);
+
+  outputChannel.appendLine(`Compiling ${parsed.base}${needsLineNumbers ? " (adding line numbers)" : ""}...`);
   outputChannel.show(true);
 
   // Generate and write .prc file
-  const prcContent = generatePrc(parsed.base, parsed.name, outputExt);
+  const prcContent = generatePrc(parsed.base, parsed.name, outputExt, needsLineNumbers);
   try {
     fs.writeFileSync(prcPath, prcContent);
   } catch (error: any) {
@@ -140,7 +213,7 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
   }
 
   try {
-    await runBrLinux(brlinuxPath, lexiPath);
+    await runBr(context, lexiPath);
   } catch (error: any) {
     vscode.window.showErrorMessage(`Compilation failed: ${error.message}`);
     return;
