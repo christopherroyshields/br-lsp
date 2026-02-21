@@ -93,8 +93,15 @@ impl BuiltinFunction {
         if self.params.is_empty() {
             self.name.clone()
         } else {
-            let params: Vec<&str> = self.params.iter().map(|p| p.name.as_str()).collect();
-            format!("{}({})", self.name, params.join(", "))
+            let params: Vec<&str> = self
+                .params
+                .iter()
+                .filter(|p| p.name != "[...]")
+                .map(|p| p.name.as_str())
+                .collect();
+            let varargs = self.params.last().is_some_and(|p| p.name == "[...]");
+            let suffix = if varargs { ", ..." } else { "" };
+            format!("{}({}{})", self.name, params.join(", "), suffix)
         }
     }
 
@@ -107,7 +114,14 @@ impl BuiltinFunction {
         label.push('(');
         let mut offsets = Vec::with_capacity(self.params.len());
 
-        for (i, param) in self.params.iter().enumerate() {
+        let real_params: Vec<_> = self
+            .params
+            .iter()
+            .filter(|p| p.name != "[...]")
+            .collect();
+        let varargs = self.params.last().is_some_and(|p| p.name == "[...]");
+
+        for (i, param) in real_params.iter().enumerate() {
             if i > 0 {
                 label.push_str(", ");
             }
@@ -115,6 +129,9 @@ impl BuiltinFunction {
             label.push_str(&param.name);
             let end = label.len() as u32;
             offsets.push([start, end]);
+        }
+        if varargs {
+            label.push_str(", ...");
         }
         label.push(')');
 

@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn builtin_completions_count() {
         let items = builtin_function_completions();
-        assert_eq!(items.len(), 117);
+        assert_eq!(items.len(), 115);
         assert!(items
             .iter()
             .all(|i| i.kind == Some(CompletionItemKind::FUNCTION)));

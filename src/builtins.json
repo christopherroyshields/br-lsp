@@ -141,20 +141,6 @@
     ]
   },
   {
-    "name": "Max$",
-    "documentation": "Finds the String with the greatest ASCII value of the given strings.",
-    "params": [
-      { "name": "<string$>" }
-    ]
-  },
-  {
-    "name": "Min$",
-    "documentation": "Finds the String with the lowest ASCII value of the given strings.",
-    "params": [
-      { "name": "<string$>" }
-    ]
-  },
-  {
     "name": "Msg$",
     "documentation": "Displays custom text in the Status Line at the bottom of the BR Command Console window.",
     "params": [
