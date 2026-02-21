@@ -256,7 +256,7 @@ function launchBrLinuxTerminal(executable: string, prcFile: string, lexiPath: st
       const cmd =
         `stty cols ${cols} rows ${rows} erase ^?; ` +
         `LD_LIBRARY_PATH='${lexiPath}' TERM=xterm-256 ` +
-        `${LOADER} '${executable}' proc ${prcFile} -${wbconfig}`;
+        `${LOADER} '${executable}' "proc :${path.join(lexiPath, prcFile)}" -${wbconfig}`;
 
       proc = spawn("script", ["-qc", cmd, "/dev/null"], {
         cwd: lexiPath,
@@ -411,11 +411,11 @@ async function runBrProgram(
     return;
   }
 
-  // Write run.prc in the cwd directory (BR's working directory via drive statement)
+  // Write run.prc in the Lexi directory; BR finds it via absolute path with : prefix
   const lexiPath = getLexiPath(context);
   const prcContent = `proc noecho\nload ":${compiledProgram}"\nrun\n`;
   const prcFileName = "run.prc";
-  const prcFilePath = path.join(cwd, prcFileName);
+  const prcFilePath = path.join(lexiPath, prcFileName);
 
   try {
     fs.writeFileSync(prcFilePath, prcContent);
