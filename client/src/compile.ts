@@ -137,7 +137,9 @@ const COMPILE_TIMEOUT_MS = 30_000;
 function runBrLinux(brlinuxPath: string, lexiPath: string, prcFile: string): Promise<void> {
   // brlinux requires a PTY — use `script` to allocate one.
   // We manage stdin ourselves to respond to prompts instead of blindly piping.
-  const cmd = `script -qc "LD_LIBRARY_PATH='${lexiPath}' ${LOADER} '${brlinuxPath}' proc ${prcFile}" /dev/null`;
+  // Use absolute path with : prefix so BR finds the proc regardless of subdirectory.
+  const absPrc = path.join(lexiPath, prcFile);
+  const cmd = `script -qc "LD_LIBRARY_PATH='${lexiPath}' ${LOADER} '${brlinuxPath}' 'proc :${absPrc}'" /dev/null`;
 
   return new Promise((resolve, reject) => {
     const proc = spawn("bash", ["-c", cmd], {
@@ -221,8 +223,10 @@ function runBrWindows(brExePath: string, lexiPath: string, prcFile: string): Pro
     spawn(lexiTipPath, [], { cwd: lexiPath, detached: true, stdio: "ignore" }).unref();
   }
 
+  const absPrc = path.join(lexiPath, prcFile);
+
   return new Promise((resolve, reject) => {
-    const proc = spawn(brExePath, ["proc", prcFile], {
+    const proc = spawn(brExePath, [`proc ${absPrc}`], {
       cwd: lexiPath,
       stdio: "pipe",
     });
@@ -276,7 +280,7 @@ function runBrWindows(brExePath: string, lexiPath: string, prcFile: string): Pro
   });
 }
 
-function runBr(context: vscode.ExtensionContext, lexiPath: string, prcFile: string): Promise<void> {
+export function runBr(context: vscode.ExtensionContext, lexiPath: string, prcFile: string): Promise<void> {
   if (process.platform === "win32") {
     const brExePath = path.join(lexiPath, "brnative.exe");
     if (!fs.existsSync(brExePath)) {
@@ -307,7 +311,7 @@ export async function compileBrProgram(filename: string, context: vscode.Extensi
 
   const lexiPath = getLexiPath(context);
   const tmpDir = path.join(lexiPath, "tmp");
-  const prcFileName = `compile${tag}.prc`;
+  const prcFileName = `tmp/compile${tag}.prc`;
   const prcPath = path.join(lexiPath, prcFileName);
   const tmpSourceBase = `${tag}_${parsed.base}`;
   const tmpSourcePath = path.join(tmpDir, tmpSourceBase);

@@ -133,7 +133,9 @@ const ROW25_RE = /\x1b\[25;\d*H/;
 // Matches cursor positioning to any other row: \x1b[N;Nc H where N != 25
 const ROW_OTHER_RE = /\x1b\[(?!25;)\d+;\d*H/;
 
-function generateWbconfig(lexiPath: string, wbconfig: string, cwd: string): string {
+let runCounter = 0;
+
+function generateWbconfig(lexiPath: string, wbconfig: string, cwd: string, tag: number): string {
   // Read the base wbconfig (user-specified or default from Lexi)
   const baseConfig = wbconfig || path.join(lexiPath, "wbconfig.sys");
   let content: string;
@@ -143,20 +145,50 @@ function generateWbconfig(lexiPath: string, wbconfig: string, cwd: string): stri
     content = "drive c:,.,\\,\\\nwbserver c:\\\n";
   }
 
-  // Replace or prepend the drive line with cwd path
-  const driveLine = `DRIVE c,${cwd},x,\\`;
-  if (/^\s*drive\s/im.test(content)) {
-    content = content.replace(/^\s*drive\s.*/im, driveLine);
+  if (process.platform !== "win32") {
+    // Linux/Mac: use absolute path in drive statement (no colon on drive letter)
+    const driveLine = `DRIVE c,${cwd},x,\\`;
+    if (/^\s*drive\s/im.test(content)) {
+      content = content.replace(/^\s*drive\s.*/im, driveLine);
+    } else {
+      content = driveLine + "\n" + content;
+    }
+
+    // Set wbserver to current directory (Lexi, where BR launches from)
+    content = content.replace(/^\s*wbserver\s.*/im, "wbserver .");
+
+    // Add screen colors if not already present
+    if (!/^\s*screen\s/im.test(content)) {
+      content += "screen r 4e,u 07,b 9d,h 3f,n 07\n";
+    }
   } else {
-    content = driveLine + "\n" + content;
+    // Windows: keep drive format as-is; cwd is set via OS cd before launching BR
+    // Just ensure the drive resolves to cwd via "." (OS current directory)
+    const driveLine = `drive c:,.,\\,\\`;
+    if (/^\s*drive\s/im.test(content)) {
+      content = content.replace(/^\s*drive\s.*/im, driveLine);
+    } else {
+      content = driveLine + "\n" + content;
+    }
   }
 
-  // Also set wbserver to current directory (Lexi, where BR launches from)
-  content = content.replace(/^\s*wbserver\s.*/im, "wbserver .");
-
-  const outName = "run.sys";
+  const tmpDir = path.join(lexiPath, "tmp");
+  if (!fs.existsSync(tmpDir)) {
+    fs.mkdirSync(tmpDir, { recursive: true });
+  }
+  const outName = `tmp/run_${tag}.sys`;
   fs.writeFileSync(path.join(lexiPath, outName), content);
   return outName;
+}
+
+function cleanupRunFiles(lexiPath: string, prcFile: string, sysFile: string): void {
+  for (const f of [path.join(lexiPath, prcFile), path.join(lexiPath, sysFile)]) {
+    try {
+      fs.unlinkSync(f);
+    } catch {
+      // ignore — file may already be gone
+    }
+  }
 }
 
 function launchBrTerminal(
@@ -181,10 +213,13 @@ function launchBrTerminal(
 
     const terminal = vscode.window.createTerminal({
       name: "BR Run",
-      cwd: lexiPath,
+      cwd: config.cwd,
     });
 
-    let cmd = `"${executable}" proc ${prcFile}`;
+    // cd to cwd (handles cross-drive navigation on Windows)
+    const drive = config.cwd.substring(0, 2);
+    const absPrc = path.join(lexiPath, prcFile);
+    let cmd = `${drive} && cd "${config.cwd}" && "${executable}" "proc ${absPrc}"`;
     if (config.wsid) {
       if (config.wsid.startsWith("+")) {
         cmd += ` ${config.wsid}`;
@@ -195,7 +230,7 @@ function launchBrTerminal(
       }
     }
     if (config.wbconfig) {
-      cmd += ` -${path.basename(config.wbconfig)}`;
+      cmd += ` -${path.join(lexiPath, config.wbconfig)}`;
     }
 
     terminal.sendText(cmd);
@@ -228,6 +263,7 @@ function launchBrLinuxTerminal(executable: string, prcFile: string, lexiPath: st
   let onRow25 = false;
   let startupBuf = "";
   let startupDone = false;
+  const MAX_STARTUP_BUF = 8192;
 
   function checkRow25(): void {
     if (!row25buf) return;
@@ -312,6 +348,11 @@ function launchBrLinuxTerminal(executable: string, prcFile: string, lexiPath: st
           if (/Press any key/i.test(startupBuf)) {
             proc?.stdin?.write("\n");
             startupDone = true;
+            startupBuf = "";
+          } else if (startupBuf.length > MAX_STARTUP_BUF) {
+            // Give up waiting — license screen not present
+            startupDone = true;
+            startupBuf = "";
           }
         }
 
@@ -326,6 +367,7 @@ function launchBrLinuxTerminal(executable: string, prcFile: string, lexiPath: st
       proc.on("close", (code) => {
         checkRow25();
         hideBrStatus();
+        cleanupRunFiles(lexiPath, prcFile, wbconfig);
         closeEmitter.fire(code ?? undefined);
       });
     },
@@ -333,6 +375,9 @@ function launchBrLinuxTerminal(executable: string, prcFile: string, lexiPath: st
     close(): void {
       proc?.kill();
       hideBrStatus();
+      cleanupRunFiles(lexiPath, prcFile, wbconfig);
+      writeEmitter.dispose();
+      closeEmitter.dispose();
     },
 
     handleInput(data: string): void {
@@ -422,10 +467,17 @@ async function runBrProgram(
     return;
   }
 
-  // Write run.prc in the Lexi directory; BR finds it via absolute path with : prefix
+  // Use a unique tag to avoid race conditions between rapid re-runs
+  const tag = ++runCounter;
   const lexiPath = getLexiPath(context);
+
+  // Write run proc in the Lexi directory; BR finds it via absolute path with : prefix
   const prcContent = `proc noecho\nload ":${compiledProgram}"\nrun\n`;
-  const prcFileName = "run.prc";
+  const tmpDir = path.join(lexiPath, "tmp");
+  if (!fs.existsSync(tmpDir)) {
+    fs.mkdirSync(tmpDir, { recursive: true });
+  }
+  const prcFileName = `tmp/run_${tag}.prc`;
   const prcFilePath = path.join(lexiPath, prcFileName);
 
   try {
@@ -436,7 +488,7 @@ async function runBrProgram(
   }
 
   // Generate a dynamic wbconfig with the drive pointing to cwd
-  const wbconfigName = generateWbconfig(lexiPath, wbconfig, cwd);
+  const wbconfigName = generateWbconfig(lexiPath, wbconfig, cwd, tag);
 
   launchBrTerminal(executable, prcFileName, { wsid, wbconfig: wbconfigName, cwd }, lexiPath);
 }
