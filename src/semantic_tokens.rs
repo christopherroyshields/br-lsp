@@ -72,6 +72,42 @@ fn walk_node(
 
     if let Some((token_type, modifiers)) = classify_node(kind, is_named, node, in_parameter, in_dim)
     {
+        // String/template_string nodes with a range child (e.g. "test"(1:2)) —
+        // emit the string token only for the quoted portion, then recurse so the
+        // range children get their own (number) tokens.
+        if matches!(kind, "string" | "template_string")
+            && (0..node.named_child_count()).any(|i| {
+                node.named_child(i)
+                    .is_some_and(|c| c.kind() == "range")
+            })
+        {
+            let start = node.start_position();
+            // Find the first range child and end the string token there
+            let mut cursor = node.walk();
+            let range_start = node
+                .children(&mut cursor)
+                .find(|c| c.kind() == "range")
+                .map(|c| c.start_position());
+            if let Some(rs) = range_start {
+                // Emit just the quoted string portion (up to the opening paren)
+                if start.row == rs.row && rs.column > start.column {
+                    tokens.push(RawToken {
+                        line: start.row as u32,
+                        start: start.column as u32,
+                        length: (rs.column - start.column) as u32,
+                        token_type,
+                        modifiers,
+                    });
+                }
+            }
+            // Recurse into children (range will emit number tokens)
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                walk_node(child, source, child_in_parameter, child_in_dim, tokens);
+            }
+            return;
+        }
+
         let start = node.start_position();
         let end = node.end_position();
 
@@ -360,5 +396,20 @@ mod tests {
         // The "1" should be classified as a number (type 6)
         let has_number = tokens.iter().any(|t| t.token_type == 6);
         assert!(has_number, "option base 1 should have a number token");
+    }
+
+    #[test]
+    fn string_with_range_splits_tokens() {
+        // "test"(1:2) — the range numbers should NOT be string tokens
+        let tokens = parse_and_collect("00100 print \"test\"(1:2)\n");
+        let string_tokens: Vec<_> = tokens.iter().filter(|t| t.token_type == 5).collect();
+        let number_tokens: Vec<_> = tokens.iter().filter(|t| t.token_type == 6).collect();
+        assert!(!string_tokens.is_empty(), "should have a string token");
+        // The range contains two numbers (1 and 2) that should be number tokens
+        assert!(
+            number_tokens.len() >= 2,
+            "range numbers should not be colored as strings, got {} number tokens",
+            number_tokens.len()
+        );
     }
 }
