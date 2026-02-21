@@ -133,6 +133,32 @@ const ROW25_RE = /\x1b\[25;\d*H/;
 // Matches cursor positioning to any other row: \x1b[N;Nc H where N != 25
 const ROW_OTHER_RE = /\x1b\[(?!25;)\d+;\d*H/;
 
+function generateWbconfig(lexiPath: string, wbconfig: string, cwd: string): string {
+  // Read the base wbconfig (user-specified or default from Lexi)
+  const baseConfig = wbconfig || path.join(lexiPath, "wbconfig.sys");
+  let content: string;
+  try {
+    content = fs.readFileSync(baseConfig, "utf8");
+  } catch {
+    content = "drive c:,.,\\,\\\nwbserver c:\\\n";
+  }
+
+  // Replace or prepend the drive line with cwd path
+  const driveLine = `DRIVE c,${cwd},x,\\`;
+  if (/^\s*drive\s/im.test(content)) {
+    content = content.replace(/^\s*drive\s.*/im, driveLine);
+  } else {
+    content = driveLine + "\n" + content;
+  }
+
+  // Also set wbserver to current directory (Lexi, where BR launches from)
+  content = content.replace(/^\s*wbserver\s.*/im, "wbserver .");
+
+  const outName = "run.sys";
+  fs.writeFileSync(path.join(lexiPath, outName), content);
+  return outName;
+}
+
 function launchBrTerminal(
   executable: string,
   prcFile: string,
@@ -175,7 +201,7 @@ function launchBrTerminal(
     terminal.sendText(cmd);
     terminal.show();
   } else {
-    launchBrLinuxTerminal(executable, prcFile, lexiPath);
+    launchBrLinuxTerminal(executable, prcFile, lexiPath, config.wbconfig);
   }
 }
 
@@ -193,7 +219,7 @@ function hideBrStatus(): void {
   brStatusBarItem?.hide();
 }
 
-function launchBrLinuxTerminal(executable: string, prcFile: string, lexiPath: string): void {
+function launchBrLinuxTerminal(executable: string, prcFile: string, lexiPath: string, wbconfig: string): void {
   const writeEmitter = new vscode.EventEmitter<string>();
   const closeEmitter = new vscode.EventEmitter<number | void>();
 
@@ -230,7 +256,7 @@ function launchBrLinuxTerminal(executable: string, prcFile: string, lexiPath: st
       const cmd =
         `stty cols ${cols} rows ${rows} erase ^?; ` +
         `LD_LIBRARY_PATH='${lexiPath}' TERM=xterm-256 ` +
-        `${LOADER} '${executable}' proc ${prcFile}`;
+        `${LOADER} '${executable}' proc ${prcFile} -${wbconfig}`;
 
       proc = spawn("script", ["-qc", cmd, "/dev/null"], {
         cwd: lexiPath,
@@ -385,11 +411,11 @@ async function runBrProgram(
     return;
   }
 
-  // Write run.prc in the Lexi directory
+  // Write run.prc in the cwd directory (BR's working directory via drive statement)
   const lexiPath = getLexiPath(context);
-  const prcContent = `proc noecho\nchdir ":${cwd}"\nload ":${compiledProgram}"\nrun\n`;
+  const prcContent = `proc noecho\nload ":${compiledProgram}"\nrun\n`;
   const prcFileName = "run.prc";
-  const prcFilePath = path.join(lexiPath, prcFileName);
+  const prcFilePath = path.join(cwd, prcFileName);
 
   try {
     fs.writeFileSync(prcFilePath, prcContent);
@@ -398,7 +424,10 @@ async function runBrProgram(
     return;
   }
 
-  launchBrTerminal(executable, prcFileName, { wsid, wbconfig, cwd }, lexiPath);
+  // Generate a dynamic wbconfig with the drive pointing to cwd
+  const wbconfigName = generateWbconfig(lexiPath, wbconfig, cwd);
+
+  launchBrTerminal(executable, prcFileName, { wsid, wbconfig: wbconfigName, cwd }, lexiPath);
 }
 
 export function activateRun(context: vscode.ExtensionContext) {
