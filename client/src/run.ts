@@ -226,6 +226,8 @@ function launchBrLinuxTerminal(executable: string, prcFile: string, lexiPath: st
   let proc: ReturnType<typeof spawn> | null = null;
   let row25buf = "";
   let onRow25 = false;
+  let startupBuf = "";
+  let startupDone = false;
 
   function checkRow25(): void {
     if (!row25buf) return;
@@ -301,6 +303,15 @@ function launchBrLinuxTerminal(executable: string, prcFile: string, lexiPath: st
             } else {
               remaining = "";
             }
+          }
+        }
+
+        // Auto-dismiss license/startup "Press any key" prompts
+        if (!startupDone) {
+          startupBuf += stripAnsi(text);
+          if (/Press any key/i.test(startupBuf)) {
+            proc?.stdin?.write("\n");
+            startupDone = true;
           }
         }
 
