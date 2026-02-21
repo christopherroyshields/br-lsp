@@ -3,6 +3,7 @@ import { commands, Uri, workspace, ExtensionContext, window } from "vscode";
 import { activateCompile } from "./compile";
 import { activateLineNumbers } from "./line-numbers";
 import { activateNextPrev } from "./next-prev";
+import { activateRun } from "./run";
 import {
   Executable,
   LanguageClient,
@@ -98,6 +99,7 @@ export async function activate(context: ExtensionContext) {
   context.subscriptions.push(scanAllCmd);
 
   activateCompile(context);
+  activateRun(context);
   activateLineNumbers(context);
   activateNextPrev(context);
 }

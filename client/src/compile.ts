@@ -14,12 +14,12 @@ let autoCompileStatusBarItem: vscode.StatusBarItem;
 let compiling = false;
 let compileId = 0;
 
-const EXT_MAP: Record<string, string> = {
+export const EXT_MAP: Record<string, string> = {
   ".brs": ".br",
   ".wbs": ".wb",
 };
 
-function getLexiPath(context: vscode.ExtensionContext): string {
+export function getLexiPath(context: vscode.ExtensionContext): string {
   return path.join(context.extensionPath, "Lexi");
 }
 
@@ -77,20 +77,30 @@ function generatePrc(p: PrcPaths): string {
   return prc;
 }
 
-function stripAnsi(text: string): string {
+export function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, "");
 }
 
-// BR status line error formats:
-// Full: 4-digit error + 5-digit line + :NN + ERROR + program
-//   e.g. "414800430:01ERROR  C:\lexi." → error 4148 on line 430
+// BR status line (row 25) layout:
+//   Col 1-7:   State (READY, PROC, RUN, etc.)
+//   Col 9-37:  Info area (release, error details)
+//   Col 62-63: Procedure level (P1, P2, ...)
+//   Col 65-73: Serial number
+//   Col 75-79: Version
+//
+// Error formats on the status line:
+// Full: 4-digit error + 5-digit line + :NN clause + ERROR + program
+//   e.g. "414800430:01ERROR  C:\lexi." → error 4148 on line 430 clause 1
 // Short: 3-4 digit error + ERROR (proc-level error, no line number)
 //   e.g. "1026ERROR" → error 1026
-const BR_ERROR_FULL_RE = /(\d{4})(\d{5}):\d{2}ERROR\s*(.*)/;
+const BR_ERROR_FULL_RE = /(\d{4})(\d{5}):(\d{2})ERROR\s*(.*)/;
 const BR_ERROR_SHORT_RE = /(\d{3,4})ERROR/;
 const FATAL_ERROR_RE = /Fatal error called with message:\s*(.*)/;
 
-function parseBrOutput(output: string): string | null {
+// State keyword at start of status line
+const BR_STATE_RE = /^(READY|PROC|RUN|INPUT|KEYIN|PRINT|STOP|PAUSE|DEBUG|SYNTAX)\b/i;
+
+export function parseBrOutput(output: string): string | null {
   const fatal = FATAL_ERROR_RE.exec(output);
   if (fatal) {
     return fatal[1].trim();
@@ -99,14 +109,27 @@ function parseBrOutput(output: string): string | null {
   if (full) {
     const errorCode = parseInt(full[1], 10);
     const lineNum = parseInt(full[2], 10);
-    const program = full[3].trim().replace(/\.$/, "");
-    return `Error ${errorCode} at line ${lineNum}` + (program ? ` in ${program}` : "");
+    const clause = parseInt(full[3], 10);
+    const program = full[4].trim().replace(/\.$/, "");
+    let msg = `Error ${errorCode} at line ${lineNum}`;
+    if (clause > 0) {
+      msg += `:${clause}`;
+    }
+    if (program) {
+      msg += ` in ${program}`;
+    }
+    return msg;
   }
   const short = BR_ERROR_SHORT_RE.exec(output);
   if (short) {
     return `Error ${parseInt(short[1], 10)}`;
   }
   return null;
+}
+
+export function parseBrState(output: string): string | null {
+  const match = BR_STATE_RE.exec(output);
+  return match ? match[1].toUpperCase() : null;
 }
 
 const COMPILE_TIMEOUT_MS = 30_000;
@@ -270,13 +293,13 @@ function runBr(context: vscode.ExtensionContext, lexiPath: string, prcFile: stri
   }
 }
 
-async function compileBrProgram(filename: string, context: vscode.ExtensionContext, focusOutput: boolean): Promise<void> {
+export async function compileBrProgram(filename: string, context: vscode.ExtensionContext, focusOutput: boolean): Promise<boolean> {
   const parsed = path.parse(filename);
   const inputExt = parsed.ext.toLowerCase();
   const outputExt = EXT_MAP[inputExt];
   if (!outputExt) {
     vscode.window.showErrorMessage(`Unsupported file extension: ${inputExt}`);
-    return;
+    return false;
   }
 
   // Unique tag per compile to avoid collisions between concurrent compiles
@@ -303,7 +326,7 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
     fs.copyFileSync(filename, tmpSourcePath);
   } catch (error: any) {
     vscode.window.showErrorMessage(`Failed to copy source file: ${error.message}`);
-    return;
+    return false;
   }
 
   const hasNumbers = hasLineNumbers(tmpSourcePath);
@@ -330,7 +353,7 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
     fs.writeFileSync(prcPath, prcContent);
   } catch (error: any) {
     vscode.window.showErrorMessage(`Failed to create procedure file: ${error.message}`);
-    return;
+    return false;
   }
 
   try {
@@ -341,7 +364,7 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
     outputChannel.appendLine(`  Error: ${error.message}`);
     outputChannel.show(false);
     vscode.window.showErrorMessage(`Compilation failed: ${error.message}`);
-    return;
+    return false;
   } finally {
     // Clean up .prc file and Lexi tempfile
     for (const f of [prcPath, path.join(tmpDir, tempFileName)]) {
@@ -374,7 +397,7 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
       outputChannel.appendLine(`  Result: OK (${elapsed}ms)`);
     } catch (copyError: any) {
       vscode.window.showErrorMessage(`Failed to copy compiled file: ${copyError.message}`);
-      return;
+      return false;
     }
   } else {
     const elapsed = Date.now() - startTime;
@@ -382,7 +405,7 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
     outputChannel.appendLine(`  Error: compiled file not found in tmp directory`);
     outputChannel.show(false);
     vscode.window.showErrorMessage("Compiled file not found in tmp directory");
-    return;
+    return false;
   }
 
   // Clean up source file from tmp
@@ -393,6 +416,8 @@ async function compileBrProgram(filename: string, context: vscode.ExtensionConte
   } catch {
     // ignore
   }
+
+  return true;
 }
 
 function toggleAutoCompile(): void {

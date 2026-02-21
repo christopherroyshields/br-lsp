@@ -96,6 +96,14 @@
       {
         "command": "br-lsp.toggleAutoCompile",
         "title": "BR: Toggle Auto-Compile on Save"
+      },
+      {
+        "command": "br-lsp.run",
+        "title": "BR: Run Program"
+      },
+      {
+        "command": "br-lsp.selectLaunchConfig",
+        "title": "BR: Select Launch Configuration"
       }
     ],
     "keybindings": [
@@ -116,6 +124,11 @@
       {
         "command": "br-lsp.compile",
         "key": "ctrl+shift+b",
+        "when": "editorTextFocus && editorLangId == br"
+      },
+      {
+        "command": "br-lsp.run",
+        "key": "ctrl+shift+r",
         "when": "editorTextFocus && editorLangId == br"
       },
       {
