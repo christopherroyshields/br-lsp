@@ -2,6 +2,7 @@ import { commands, Uri, workspace, ExtensionContext, window } from "vscode";
 
 import { activateCompile } from "./compile";
 import { activateDecompile } from "./decompile";
+import { activateInspector } from "./inspector";
 import { activateLineNumbers } from "./line-numbers";
 import { activateNextPrev } from "./next-prev";
 import { activateRun } from "./run";
@@ -101,6 +102,7 @@ export async function activate(context: ExtensionContext) {
 
   activateCompile(context);
   activateDecompile(context);
+  activateInspector(context, client);
   activateRun(context);
   activateLineNumbers(context);
   activateNextPrev(context);

@@ -5,10 +5,10 @@
   "description": "Language server for the Business Rules (BR) programming language",
   "categories": [],
   "keywords": [
-    "language-server",
-    "tower-lsp",
+    "br",
     "business-rules",
-    "br"
+    "language-server",
+    "tower-lsp"
   ],
   "license": "MIT",
   "main": "./dist/extension.js",
@@ -45,7 +45,10 @@
     "languages": [
       {
         "id": "br",
-        "aliases": ["Business Rules", "BR"],
+        "aliases": [
+          "Business Rules",
+          "BR"
+        ],
         "extensions": [
           ".brs",
           ".wbs"
@@ -54,9 +57,15 @@
       },
       {
         "id": "lay",
-        "aliases": ["Fileio Layout"],
-        "extensions": [".lay"],
-        "filenamePatterns": ["**/filelay/*"]
+        "aliases": [
+          "Fileio Layout"
+        ],
+        "extensions": [
+          ".lay"
+        ],
+        "filenamePatterns": [
+          "**/filelay/*"
+        ]
       }
     ],
     "grammars": [
@@ -67,10 +76,22 @@
       }
     ],
     "snippets": [
-      { "language": "br", "path": "./snippets/fileio.json" },
-      { "language": "br", "path": "./snippets/lexi.json" },
-      { "language": "br", "path": "./snippets/loops.json" },
-      { "language": "br", "path": "./snippets/statements.json" }
+      {
+        "language": "br",
+        "path": "./snippets/fileio.json"
+      },
+      {
+        "language": "br",
+        "path": "./snippets/lexi.json"
+      },
+      {
+        "language": "br",
+        "path": "./snippets/loops.json"
+      },
+      {
+        "language": "br",
+        "path": "./snippets/statements.json"
+      }
     ],
     "commands": [
       {
@@ -108,6 +129,14 @@
       {
         "command": "br-lsp.decompile",
         "title": "BR: Decompile Program"
+      },
+      {
+        "command": "br-lsp.decompileFolder",
+        "title": "BR: Decompile All Programs in Folder"
+      },
+      {
+        "command": "br-lsp.toggleInspector",
+        "title": "BR: Toggle Tree-Sitter Inspector"
       }
     ],
     "menus": {
@@ -115,6 +144,11 @@
         {
           "command": "br-lsp.decompile",
           "when": "resourceExtname == .br || resourceExtname == .wb",
+          "group": "navigation"
+        },
+        {
+          "command": "br-lsp.decompileFolder",
+          "when": "explorerResourceIsFolder",
           "group": "navigation"
         }
       ]
@@ -148,29 +182,58 @@
         "command": "br-lsp.autoInsertLineNumber",
         "key": "enter",
         "when": "editorTextFocus && editorLangId == br && !suggestWidgetVisible && !renameInputVisible && !inSnippetMode && !quickFixWidgetVisible"
+      },
+      {
+        "command": "br-lsp.toggleInspector",
+        "key": "ctrl+shift+alt+i",
+        "when": "editorTextFocus && editorLangId == br"
       }
     ],
     "semanticTokenScopes": [
       {
         "language": "br",
         "scopes": {
-          "keyword": ["keyword.statement.br"],
-          "keyword.controlFlow": ["keyword.control.br"],
-          "function": ["entity.name.function.br"],
-          "function.defaultLibrary": ["entity.name.function.br"],
-          "variable": ["variable.numeric.br"],
-          "number": ["constant.numeric.br"],
-          "property": ["string.regexp.line-label.br"],
-          "property.definition": ["string.regexp.line-label.br"],
-          "enumMember": ["keyword.errorcondition.br"],
-          "operator": ["keyword.operator.mathematical.br"],
-          "lineNumber": ["linenumber.br"]
+          "keyword": [
+            "keyword.statement.br"
+          ],
+          "keyword.controlFlow": [
+            "keyword.control.br"
+          ],
+          "function": [
+            "entity.name.function.br"
+          ],
+          "function.defaultLibrary": [
+            "entity.name.function.br"
+          ],
+          "variable": [
+            "variable.numeric.br"
+          ],
+          "number": [
+            "constant.numeric.br"
+          ],
+          "property": [
+            "string.regexp.line-label.br"
+          ],
+          "property.definition": [
+            "string.regexp.line-label.br"
+          ],
+          "enumMember": [
+            "keyword.errorcondition.br"
+          ],
+          "operator": [
+            "keyword.operator.mathematical.br"
+          ],
+          "lineNumber": [
+            "linenumber.br"
+          ]
         }
       },
       {
         "language": "lay",
         "scopes": {
-          "invalid": ["invalid"]
+          "invalid": [
+            "invalid"
+          ]
         }
       }
     ],

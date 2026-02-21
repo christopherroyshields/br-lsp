@@ -1516,9 +1516,7 @@ impl LanguageServer for Backend {
             };
 
             let kind = match parent.kind() {
-                "numeric_system_function" | "string_system_function" => {
-                    HoverKind::Builtin(fn_name)
-                }
+                "numeric_system_function" | "string_system_function" => HoverKind::Builtin(fn_name),
                 _ => {
                     let library_links = extract::extract_library_links(tree, &doc.source);
                     HoverKind::User(fn_name, library_links)
@@ -1865,7 +1863,9 @@ impl LanguageServer for Backend {
     }
 
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
-        debug!("command executed: {}", params.command);
+        if params.command != "br-lsp.inspectNode" {
+            debug!("command executed: {}", params.command);
+        }
 
         if params.command == "br-lsp.scanAll" {
             let start = std::time::Instant::now();
@@ -1908,6 +1908,148 @@ impl LanguageServer for Backend {
             return Ok(Some(serde_json::json!({
                 "summary": summary,
                 "csv": csv,
+            })));
+        }
+
+        if params.command == "br-lsp.inspectNode" {
+            let args = params.arguments;
+            let uri_str = args.first().and_then(|v| v.as_str()).unwrap_or_default();
+            let line = args.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let character = args.get(2).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+            let doc = match self.document_map.get(uri_str) {
+                Some(d) => d,
+                None => return Ok(None),
+            };
+            let tree = match doc.tree.as_ref() {
+                Some(t) => t,
+                None => return Ok(None),
+            };
+
+            let point = Point::new(line, character);
+
+            // Deepest node (including anonymous like keywords/operators)
+            let node = match tree.root_node().descendant_for_point_range(point, point) {
+                Some(n) => n,
+                None => return Ok(None),
+            };
+
+            let kind = node.kind().to_string();
+            let is_named = node.is_named();
+            let text = node
+                .utf8_text(doc.source.as_bytes())
+                .unwrap_or("")
+                .to_string();
+            let text = if text.len() > 80 {
+                format!("{}...", &text[..80])
+            } else {
+                text
+            };
+
+            let range = parser::node_range(node);
+
+            // Build ancestor chain
+            let mut ancestors = Vec::new();
+            let mut current = node.parent();
+            while let Some(n) = current {
+                ancestors.push(n.kind().to_string());
+                current = n.parent();
+            }
+            ancestors.reverse();
+
+            // Named ancestor (for anonymous nodes)
+            let named_ancestor = if !is_named {
+                let mut p = node.parent();
+                while let Some(n) = p {
+                    if n.is_named() {
+                        break;
+                    }
+                    p = n.parent();
+                }
+                p.filter(|n| n.is_named()).map(|n| {
+                    serde_json::json!({
+                        "kind": n.kind(),
+                        "range": {
+                            "start": { "line": parser::node_range(n).start.line, "character": parser::node_range(n).start.character },
+                            "end": { "line": parser::node_range(n).end.line, "character": parser::node_range(n).end.character }
+                        }
+                    })
+                })
+            } else {
+                None
+            };
+
+            // Semantic token classification via the named node at position
+            let semantic_token = {
+                let named_node = parser::node_at_position(tree, line, character);
+                named_node
+                    .and_then(|nn| {
+                        let in_parameter = semantic_tokens::is_inside(nn, "parameter_list")
+                            || semantic_tokens::is_inside(nn, "required_parameter")
+                            || semantic_tokens::is_inside(nn, "optional_parameter")
+                            || semantic_tokens::is_inside(nn, "parameter");
+                        let in_dim = semantic_tokens::is_inside(nn, "dim_statement");
+                        semantic_tokens::classify_node(
+                            nn.kind(),
+                            nn.is_named(),
+                            nn,
+                            in_parameter,
+                            in_dim,
+                        )
+                        .map(|(type_idx, mod_bits)| {
+                            let type_name = semantic_tokens::TOKEN_TYPES
+                                .get(type_idx as usize)
+                                .map(|t| t.as_str().to_string())
+                                .unwrap_or_else(|| type_idx.to_string());
+                            let modifiers: Vec<String> = semantic_tokens::TOKEN_MODIFIERS
+                                .iter()
+                                .enumerate()
+                                .filter(|(i, _)| mod_bits & (1 << i) != 0)
+                                .map(|(_, m)| m.as_str().to_string())
+                                .collect();
+                            serde_json::json!({ "type": type_name, "modifiers": modifiers })
+                        })
+                    })
+                    // Also try classifying the deepest (possibly anonymous) node directly
+                    .or_else(|| {
+                        let in_parameter = semantic_tokens::is_inside(node, "parameter_list")
+                            || semantic_tokens::is_inside(node, "required_parameter")
+                            || semantic_tokens::is_inside(node, "optional_parameter")
+                            || semantic_tokens::is_inside(node, "parameter");
+                        let in_dim = semantic_tokens::is_inside(node, "dim_statement");
+                        semantic_tokens::classify_node(&kind, is_named, node, in_parameter, in_dim)
+                            .map(|(type_idx, mod_bits)| {
+                                let type_name = semantic_tokens::TOKEN_TYPES
+                                    .get(type_idx as usize)
+                                    .map(|t| t.as_str().to_string())
+                                    .unwrap_or_else(|| type_idx.to_string());
+                                let modifiers: Vec<String> = semantic_tokens::TOKEN_MODIFIERS
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(i, _)| mod_bits & (1 << i) != 0)
+                                    .map(|(_, m)| m.as_str().to_string())
+                                    .collect();
+                                serde_json::json!({ "type": type_name, "modifiers": modifiers })
+                            })
+                    })
+            };
+
+            return Ok(Some(serde_json::json!({
+                "kind": kind,
+                "isNamed": is_named,
+                "text": text,
+                "range": {
+                    "start": { "line": range.start.line, "character": range.start.character },
+                    "end": { "line": range.end.line, "character": range.end.character }
+                },
+                "ancestors": ancestors,
+                "childCount": node.child_count(),
+                "namedChildCount": node.named_child_count(),
+                "isError": node.is_error(),
+                "isMissing": node.is_missing(),
+                "hasError": node.has_error(),
+                "namedAncestor": named_ancestor,
+                "semanticToken": semantic_token,
             })));
         }
 
@@ -2198,8 +2340,14 @@ mod tests {
 
         // Replace 'B' (at line 0, col 2 in chars) with 'C'
         let range = Range {
-            start: Position { line: 0, character: 2 },
-            end: Position { line: 0, character: 3 },
+            start: Position {
+                line: 0,
+                character: 2,
+            },
+            end: Position {
+                line: 0,
+                character: 3,
+            },
         };
         let edit = apply_change(&mut rope, &mut source, &range, "C");
 

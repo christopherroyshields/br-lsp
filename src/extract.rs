@@ -430,10 +430,7 @@ fn collect_library_links(node: Node, source: &str, links: &mut HashMap<String, S
                         for grandchild in child.children(&mut inner) {
                             if grandchild.kind() == "function_name" {
                                 if let Ok(name) = grandchild.utf8_text(source.as_bytes()) {
-                                    links.insert(
-                                        name.to_ascii_lowercase(),
-                                        normalized.clone(),
-                                    );
+                                    links.insert(name.to_ascii_lowercase(), normalized.clone());
                                 }
                             }
                         }
@@ -460,10 +457,7 @@ fn extract_string_literal(node: Node, source: &str) -> Option<String> {
             let trimmed = text
                 .strip_prefix('"')
                 .and_then(|s| s.strip_suffix('"'))
-                .or_else(|| {
-                    text.strip_prefix('\'')
-                        .and_then(|s| s.strip_suffix('\''))
-                });
+                .or_else(|| text.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')));
             return trimmed.map(|s| s.to_string());
         }
         let mut cursor = n.walk();
@@ -697,9 +691,7 @@ def fnAdd(A, B) = A + B
 
     #[test]
     fn library_links_basic() {
-        let links = parse_and_extract_links(
-            "library \"vol002\\rtflib\": fnRTF, fnRTFStart$\n",
-        );
+        let links = parse_and_extract_links("library \"vol002\\rtflib\": fnRTF, fnRTFStart$\n");
         assert_eq!(links.get("fnrtf").unwrap(), "vol002/rtflib");
         assert_eq!(links.get("fnrtfstart$").unwrap(), "vol002/rtflib");
     }

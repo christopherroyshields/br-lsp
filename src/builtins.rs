@@ -114,11 +114,7 @@ impl BuiltinFunction {
         label.push('(');
         let mut offsets = Vec::with_capacity(self.params.len());
 
-        let real_params: Vec<_> = self
-            .params
-            .iter()
-            .filter(|p| p.name != "[...]")
-            .collect();
+        let real_params: Vec<_> = self.params.iter().filter(|p| p.name != "[...]").collect();
         let varargs = self.params.last().is_some_and(|p| p.name == "[...]");
 
         for (i, param) in real_params.iter().enumerate() {

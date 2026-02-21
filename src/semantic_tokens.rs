@@ -76,10 +76,8 @@ fn walk_node(
         // emit the string token only for the quoted portion, then recurse so the
         // range children get their own (number) tokens.
         if matches!(kind, "string" | "template_string")
-            && (0..node.named_child_count()).any(|i| {
-                node.named_child(i)
-                    .is_some_and(|c| c.kind() == "range")
-            })
+            && (0..node.named_child_count())
+                .any(|i| node.named_child(i).is_some_and(|c| c.kind() == "range"))
         {
             let start = node.start_position();
             // Find the first range child and end the string token there
@@ -159,7 +157,7 @@ fn is_leaf_token(kind: &str) -> bool {
     )
 }
 
-fn classify_node(
+pub(crate) fn classify_node(
     kind: &str,
     is_named: bool,
     node: tree_sitter::Node,
@@ -206,7 +204,7 @@ fn classify_node(
 }
 
 /// Check if a node has an ancestor with the given kind.
-fn is_inside(node: tree_sitter::Node, ancestor_kind: &str) -> bool {
+pub(crate) fn is_inside(node: tree_sitter::Node, ancestor_kind: &str) -> bool {
     let mut current = node.parent();
     while let Some(n) = current {
         if n.kind() == ancestor_kind {
