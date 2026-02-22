@@ -1047,22 +1047,31 @@ impl LanguageServer for Backend {
         });
 
         if let Some(name) = fn_name {
-            // Cross-file search for user function references
-            let locations = self.search_workspace_for_function_refs(&name).await;
-            let count = locations.len();
-            self.client
-                .log_message(
-                    MessageType::LOG,
-                    format!(
-                        "references (cross-file, \"{name}\"): {count} locations ({:.1?})",
-                        start.elapsed()
-                    ),
-                )
-                .await;
-            if locations.is_empty() {
-                return Ok(None);
+            // Only search cross-file if the function is declared as library
+            let is_library_fn = {
+                let index = self.workspace_index.read().await;
+                index.lookup(&name).iter().any(|d| d.def.is_library)
+            };
+
+            if is_library_fn {
+                // Cross-file search for library function references
+                let locations = self.search_workspace_for_function_refs(&name).await;
+                let count = locations.len();
+                self.client
+                    .log_message(
+                        MessageType::LOG,
+                        format!(
+                            "references (cross-file, \"{name}\"): {count} locations ({:.1?})",
+                            start.elapsed()
+                        ),
+                    )
+                    .await;
+                if locations.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(locations));
             }
-            return Ok(Some(locations));
+            // Non-library function: fall through to single-file search
         }
 
         // Non-function symbols: single-file references
@@ -1192,45 +1201,54 @@ impl LanguageServer for Backend {
         });
 
         if let Some(name) = fn_name {
-            // Cross-file rename for user functions
-            let locations = self.search_workspace_for_function_refs(&name).await;
-            if locations.is_empty() {
+            // Only search cross-file if the function is declared as library
+            let is_library_fn = {
+                let index = self.workspace_index.read().await;
+                index.lookup(&name).iter().any(|d| d.def.is_library)
+            };
+
+            if is_library_fn {
+                // Cross-file rename for library functions
+                let locations = self.search_workspace_for_function_refs(&name).await;
+                if locations.is_empty() {
+                    self.client
+                        .log_message(
+                            MessageType::LOG,
+                            format!(
+                                "rename (cross-file, \"{name}\" -> \"{}\"): 0 edits ({:.1?})",
+                                params.new_name,
+                                start.elapsed()
+                            ),
+                        )
+                        .await;
+                    return Ok(None);
+                }
+                let edit_count = locations.len();
+                let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+                    std::collections::HashMap::new();
+                for loc in locations {
+                    changes.entry(loc.uri).or_default().push(TextEdit {
+                        range: loc.range,
+                        new_text: params.new_name.clone(),
+                    });
+                }
+                let file_count = changes.len();
                 self.client
                     .log_message(
                         MessageType::LOG,
                         format!(
-                            "rename (cross-file, \"{name}\" -> \"{}\"): 0 edits ({:.1?})",
+                            "rename (cross-file, \"{name}\" -> \"{}\"): {edit_count} edits across {file_count} files ({:.1?})",
                             params.new_name,
                             start.elapsed()
                         ),
                     )
                     .await;
-                return Ok(None);
+                return Ok(Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }));
             }
-            let edit_count = locations.len();
-            let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
-                std::collections::HashMap::new();
-            for loc in locations {
-                changes.entry(loc.uri).or_default().push(TextEdit {
-                    range: loc.range,
-                    new_text: params.new_name.clone(),
-                });
-            }
-            let file_count = changes.len();
-            self.client
-                .log_message(
-                    MessageType::LOG,
-                    format!(
-                        "rename (cross-file, \"{name}\" -> \"{}\"): {edit_count} edits across {file_count} files ({:.1?})",
-                        params.new_name,
-                        start.elapsed()
-                    ),
-                )
-                .await;
-            return Ok(Some(WorkspaceEdit {
-                changes: Some(changes),
-                ..Default::default()
-            }));
+            // Non-library function: fall through to single-file rename
         }
 
         // Non-function symbols: single-file rename
