@@ -292,11 +292,68 @@ async function decompileFolder(
   );
 }
 
+class CompiledBRDocument implements vscode.CustomDocument {
+  constructor(public readonly uri: vscode.Uri) {}
+  dispose(): void {}
+}
+
+class CompiledBREditorProvider implements vscode.CustomReadonlyEditorProvider {
+  constructor(private context: vscode.ExtensionContext) {}
+
+  async openCustomDocument(uri: vscode.Uri): Promise<CompiledBRDocument> {
+    this.handleCompiledFile(uri);
+    return new CompiledBRDocument(uri);
+  }
+
+  async resolveCustomEditor(
+    _document: CompiledBRDocument,
+    webviewPanel: vscode.WebviewPanel,
+  ): Promise<void> {
+    webviewPanel.webview.html = `
+      <html>
+        <body style="padding: 20px;">
+          <h3>BR Compiled File</h3>
+          <p>Opening source file...</p>
+        </body>
+      </html>
+    `;
+    setTimeout(() => {
+      try {
+        webviewPanel.dispose();
+      } catch {
+        // ignore
+      }
+    }, 500);
+  }
+
+  private async handleCompiledFile(uri: vscode.Uri): Promise<void> {
+    const filePath = uri.fsPath;
+    const parsed = path.parse(filePath);
+    const ext = parsed.ext.toLowerCase();
+    const sourceExt = DECOMPILE_EXT_MAP[ext];
+    if (!sourceExt) return;
+
+    const sourcePath = path.join(parsed.dir, parsed.name + sourceExt);
+
+    if (fs.existsSync(sourcePath)) {
+      const doc = await vscode.workspace.openTextDocument(sourcePath);
+      await vscode.window.showTextDocument(doc, { preview: false });
+    } else {
+      await decompileBrProgram(filePath, this.context);
+    }
+  }
+}
+
 export function activateDecompile(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel("BR Decompile");
 
+  const editorProvider = new CompiledBREditorProvider(context);
+
   context.subscriptions.push(
     outputChannel,
+    vscode.window.registerCustomEditorProvider("br-lsp.compiledBREditor", editorProvider, {
+      supportsMultipleEditorsPerDocument: false,
+    }),
     vscode.commands.registerCommand("br-lsp.decompile", async (uri?: vscode.Uri) => {
       let filename: string;
       if (uri) {

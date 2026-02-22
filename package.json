@@ -139,6 +139,21 @@
         "title": "BR: Toggle Tree-Sitter Inspector"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "br-lsp.compiledBREditor",
+        "displayName": "BR Compiled File Handler",
+        "selector": [
+          {
+            "filenamePattern": "*.br"
+          },
+          {
+            "filenamePattern": "*.wb"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "menus": {
       "explorer/context": [
         {
@@ -308,6 +323,7 @@
     }
   },
   "activationEvents": [
+    "onCustomEditor:br-lsp.compiledBREditor",
     "onLanguage:br",
     "onLanguage:lay"
   ],
