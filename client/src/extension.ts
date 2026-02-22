@@ -8,6 +8,7 @@ import { activateInspector } from "./inspector";
 import { activateLexi } from "./lexi";
 import { activateLineNumbers } from "./line-numbers";
 import { activateNextPrev } from "./next-prev";
+import { activateProcSearch } from "./proc-search";
 import { activateRun } from "./run";
 import {
   Executable,
@@ -118,6 +119,7 @@ export async function activate(context: ExtensionContext) {
   activateLexi(context);
   activateLineNumbers(context);
   activateNextPrev(context);
+  activateProcSearch(context);
 }
 
 export function deactivate(): Thenable<void> | undefined {

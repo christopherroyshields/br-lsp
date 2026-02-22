@@ -95,6 +95,23 @@
         "path": "./snippets/statements.json"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "br-search",
+          "title": "Proc Search",
+          "icon": "$(search)"
+        }
+      ]
+    },
+    "views": {
+      "br-search": [
+        {
+          "id": "brSearchResults",
+          "name": "Proc Search Results"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "br-lsp.scanAll",
@@ -147,6 +164,25 @@
       {
         "command": "br-lsp.stripLineNumbers",
         "title": "Lexi: Strip Line Numbers"
+      },
+      {
+        "command": "br-lsp.procSearch",
+        "title": "BR: Proc Search",
+        "icon": "$(search)"
+      },
+      {
+        "command": "br-lsp.modifyProcSearch",
+        "title": "Modify Search",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "br-lsp.clearProcSearch",
+        "title": "Clear Search Results",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "br-lsp.openSearchResult",
+        "title": "BR: Open Search Result"
       }
     ],
     "resourceLabelFormatters": [
@@ -174,6 +210,23 @@
       }
     ],
     "menus": {
+      "view/title": [
+        {
+          "command": "br-lsp.procSearch",
+          "when": "view == brSearchResults",
+          "group": "navigation"
+        },
+        {
+          "command": "br-lsp.modifyProcSearch",
+          "when": "view == brSearchResults",
+          "group": "navigation"
+        },
+        {
+          "command": "br-lsp.clearProcSearch",
+          "when": "view == brSearchResults",
+          "group": "navigation"
+        }
+      ],
       "explorer/context": [
         {
           "command": "br-lsp.decompile",
@@ -231,6 +284,10 @@
         "command": "br-lsp.stripLineNumbers",
         "key": "ctrl+alt+4",
         "when": "editorTextFocus && editorLangId == br"
+      },
+      {
+        "command": "br-lsp.procSearch",
+        "key": "ctrl+alt+f"
       }
     ],
     "semanticTokenScopes": [
