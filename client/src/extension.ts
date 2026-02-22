@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import { commands, Uri, workspace, ExtensionContext, window } from "vscode";
 
 import { activateCompile } from "./compile";
@@ -23,7 +25,14 @@ export async function activate(context: ExtensionContext) {
   const outputChannel = window.createOutputChannel("BR Language Server");
   outputChannel.appendLine("Starting BR Language Server...");
   const traceOutputChannel = window.createOutputChannel("BR Language Server trace");
-  const command = process.env.SERVER_PATH || "br-lsp";
+  const binaryName = process.platform === "win32" ? "br-lsp.exe" : "br-lsp-linux";
+  const bundledPath = path.join(context.extensionPath, "server", binaryName);
+  if (process.platform !== "win32") {
+    try {
+      fs.chmodSync(bundledPath, 0o755);
+    } catch {}
+  }
+  const command = process.env.SERVER_PATH || bundledPath;
   const run: Executable = {
     command,
     options: {

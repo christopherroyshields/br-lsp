@@ -5,7 +5,7 @@ src/
 tsconfig.json
 webpack.config.js
 client/**
-target
+target/
 Cargo.lock
 .github
 .cargo

@@ -226,7 +226,7 @@ function runBrWindows(brExePath: string, lexiPath: string, prcFile: string): Pro
   const absPrc = path.join(lexiPath, prcFile);
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(brExePath, [`proc ${absPrc}`], {
+    const proc = spawn(brExePath, [`proc :${absPrc}`], {
       cwd: lexiPath,
       stdio: "pipe",
     });
