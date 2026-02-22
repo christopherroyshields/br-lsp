@@ -5,6 +5,7 @@ import { commands, Uri, workspace, ExtensionContext, window } from "vscode";
 import { activateCompile } from "./compile";
 import { activateDecompile } from "./decompile";
 import { activateInspector } from "./inspector";
+import { activateLexi } from "./lexi";
 import { activateLineNumbers } from "./line-numbers";
 import { activateNextPrev } from "./next-prev";
 import { activateRun } from "./run";
@@ -50,6 +51,7 @@ export async function activate(context: ExtensionContext) {
   let clientOptions: LanguageClientOptions = {
     documentSelector: [
       { scheme: "file", language: "br" },
+      { scheme: "br-compiled", language: "br" },
       { scheme: "file", language: "lay" },
     ],
     synchronize: {
@@ -113,6 +115,7 @@ export async function activate(context: ExtensionContext) {
   activateDecompile(context);
   activateInspector(context, client);
   activateRun(context);
+  activateLexi(context);
   activateLineNumbers(context);
   activateNextPrev(context);
 }

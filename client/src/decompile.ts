@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
-import { getLexiPath, runBr } from "./compile";
+import { EXT_MAP, getLexiPath, runBr } from "./compile";
 
 const DECOMPILE_EXT_MAP: Record<string, string> = {
   ".br": ".brs",
@@ -292,6 +292,254 @@ async function decompileFolder(
   );
 }
 
+interface CacheEntry {
+  content: Uint8Array;
+  mtimeMs: number;
+}
+
+class BRCompiledFS implements vscode.FileSystemProvider {
+  private cache = new Map<string, CacheEntry>();
+  private pendingReads = new Map<string, Promise<Uint8Array>>();
+  private context: vscode.ExtensionContext;
+
+  private _onDidChangeFile = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
+  readonly onDidChangeFile = this._onDidChangeFile.event;
+
+  constructor(context: vscode.ExtensionContext) {
+    this.context = context;
+  }
+
+  static toVirtualUri(compiledFsPath: string): vscode.Uri {
+    const parsed = path.parse(compiledFsPath);
+    const ext = parsed.ext.toLowerCase();
+    const sourceExt = DECOMPILE_EXT_MAP[ext];
+    if (!sourceExt) throw new Error(`Unsupported extension: ${ext}`);
+    const virtualPath = path.join(parsed.dir, parsed.name + sourceExt);
+    return vscode.Uri.from({ scheme: "br-compiled", path: virtualPath });
+  }
+
+  static toRealPath(uri: vscode.Uri): string {
+    const parsed = path.parse(uri.path);
+    const ext = parsed.ext.toLowerCase();
+    const compiledExt = EXT_MAP[ext];
+    if (!compiledExt) throw new Error(`Unsupported extension: ${ext}`);
+    return path.join(parsed.dir, parsed.name + compiledExt);
+  }
+
+  watch(): vscode.Disposable {
+    return new vscode.Disposable(() => {});
+  }
+
+  stat(uri: vscode.Uri): vscode.FileStat {
+    const realPath = BRCompiledFS.toRealPath(uri);
+    let realStat: fs.Stats;
+    try {
+      realStat = fs.statSync(realPath);
+    } catch {
+      throw vscode.FileSystemError.FileNotFound(uri);
+    }
+    const cached = this.cache.get(realPath);
+    return {
+      type: vscode.FileType.File,
+      ctime: realStat.ctimeMs,
+      mtime: realStat.mtimeMs,
+      size: cached ? cached.content.byteLength : realStat.size,
+    };
+  }
+
+  async readFile(uri: vscode.Uri): Promise<Uint8Array> {
+    const realPath = BRCompiledFS.toRealPath(uri);
+
+    let mtimeMs: number;
+    try {
+      mtimeMs = fs.statSync(realPath).mtimeMs;
+    } catch {
+      throw vscode.FileSystemError.FileNotFound(uri);
+    }
+
+    const cached = this.cache.get(realPath);
+    if (cached && cached.mtimeMs === mtimeMs) {
+      return cached.content;
+    }
+
+    // Deduplicate concurrent reads
+    const pending = this.pendingReads.get(realPath);
+    if (pending) return pending;
+
+    const promise = this.doReadFile(uri, realPath, mtimeMs);
+    this.pendingReads.set(realPath, promise);
+    try {
+      return await promise;
+    } finally {
+      this.pendingReads.delete(realPath);
+    }
+  }
+
+  private async doReadFile(
+    uri: vscode.Uri,
+    realPath: string,
+    mtimeMs: number,
+  ): Promise<Uint8Array> {
+    const tag = String(decompileId++);
+    const lexiPath = getLexiPath(this.context);
+    const tmpDir = path.join(lexiPath, "tmp");
+    const parsed = path.parse(uri.path);
+    const prcFileName = `tmp/vfs-decompile${tag}.prc`;
+    const prcPath = path.join(lexiPath, prcFileName);
+    const tmpOutputName = `vfs-decompile${tag}${parsed.ext}`;
+    const tmpOutputPath = path.join(tmpDir, tmpOutputName);
+
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
+
+    const prcContent = [
+      "proc noecho",
+      `load ":${realPath}"`,
+      `list >":${tmpOutputPath}"`,
+      "system",
+      "",
+    ].join("\n");
+
+    try {
+      fs.writeFileSync(prcPath, prcContent);
+    } catch (error: any) {
+      throw vscode.FileSystemError.Unavailable(error.message);
+    }
+
+    try {
+      await runBr(this.context, lexiPath, prcFileName);
+    } catch (error: any) {
+      outputChannel.appendLine(`Virtual FS decompile failed for ${realPath}: ${error.message}`);
+      throw vscode.FileSystemError.Unavailable(error.message);
+    } finally {
+      try {
+        if (fs.existsSync(prcPath)) fs.unlinkSync(prcPath);
+      } catch {}
+    }
+
+    if (!fs.existsSync(tmpOutputPath)) {
+      throw vscode.FileSystemError.Unavailable("Decompiled file not found");
+    }
+
+    try {
+      const content = new Uint8Array(fs.readFileSync(tmpOutputPath));
+      this.cache.set(realPath, { content, mtimeMs });
+      return content;
+    } finally {
+      try {
+        fs.unlinkSync(tmpOutputPath);
+      } catch {}
+    }
+  }
+
+  async writeFile(
+    uri: vscode.Uri,
+    content: Uint8Array,
+    _options: { create: boolean; overwrite: boolean },
+  ): Promise<void> {
+    const realPath = BRCompiledFS.toRealPath(uri);
+    const tag = String(decompileId++);
+    const lexiPath = getLexiPath(this.context);
+    const tmpDir = path.join(lexiPath, "tmp");
+    const parsed = path.parse(uri.path);
+    const compiledExt = EXT_MAP[parsed.ext.toLowerCase()];
+    const prcFileName = `tmp/vfs-compile${tag}.prc`;
+    const prcPath = path.join(lexiPath, prcFileName);
+    const tmpSourceName = `vfs-compile${tag}${parsed.ext}`;
+    const tmpSourcePath = path.join(tmpDir, tmpSourceName);
+    const tmpOutputBase = `vfs-compile${tag}`;
+    const tmpOutputPath = path.join(tmpDir, tmpOutputBase + compiledExt);
+    const tmpOutputNoExt = path.join(tmpDir, tmpOutputBase);
+
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
+
+    try {
+      fs.writeFileSync(tmpSourcePath, content);
+    } catch (error: any) {
+      throw vscode.FileSystemError.Unavailable(error.message);
+    }
+
+    // Use relative backslash paths from Lexi dir (subproc is a proc command,
+    // not a BR statement, so it doesn't support : absolute path prefix)
+    const prcContent = [
+      "proc noecho",
+      `subproc tmp\\${tmpSourceName}`,
+      `save "tmp\\${tmpOutputBase}${compiledExt}"`,
+      "system",
+      "",
+    ].join("\n");
+
+    try {
+      fs.writeFileSync(prcPath, prcContent);
+    } catch (error: any) {
+      throw vscode.FileSystemError.Unavailable(error.message);
+    }
+
+    try {
+      await runBr(this.context, lexiPath, prcFileName);
+    } catch (error: any) {
+      vscode.window.showErrorMessage(`Compile failed: ${error.message}`);
+      throw vscode.FileSystemError.Unavailable(error.message);
+    } finally {
+      for (const f of [prcPath, tmpSourcePath]) {
+        try {
+          if (fs.existsSync(f)) fs.unlinkSync(f);
+        } catch {}
+      }
+    }
+
+    // Copy compiled file from tmp to real destination (BR may save with or without extension)
+    const compiledFile = fs.existsSync(tmpOutputPath)
+      ? tmpOutputPath
+      : fs.existsSync(tmpOutputNoExt)
+        ? tmpOutputNoExt
+        : null;
+
+    if (!compiledFile) {
+      vscode.window.showErrorMessage("Compile failed: compiled file not found in tmp directory");
+      throw vscode.FileSystemError.Unavailable("Compiled file not found");
+    }
+
+    try {
+      fs.copyFileSync(compiledFile, realPath);
+    } catch (error: any) {
+      vscode.window.showErrorMessage(`Failed to copy compiled file: ${error.message}`);
+      throw vscode.FileSystemError.Unavailable(error.message);
+    } finally {
+      try {
+        fs.unlinkSync(compiledFile);
+      } catch {}
+    }
+
+    // Update cache with written content and new mtime
+    try {
+      const newMtime = fs.statSync(realPath).mtimeMs;
+      this.cache.set(realPath, { content: new Uint8Array(content), mtimeMs: newMtime });
+    } catch {}
+
+    this._onDidChangeFile.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+  }
+
+  readDirectory(): [string, vscode.FileType][] {
+    throw vscode.FileSystemError.NoPermissions();
+  }
+
+  createDirectory(): void {
+    throw vscode.FileSystemError.NoPermissions();
+  }
+
+  delete(): void {
+    throw vscode.FileSystemError.NoPermissions();
+  }
+
+  rename(): void {
+    throw vscode.FileSystemError.NoPermissions();
+  }
+}
+
 class CompiledBRDocument implements vscode.CustomDocument {
   constructor(public readonly uri: vscode.Uri) {}
   dispose(): void {}
@@ -327,19 +575,19 @@ class CompiledBREditorProvider implements vscode.CustomReadonlyEditorProvider {
   }
 
   private async handleCompiledFile(uri: vscode.Uri): Promise<void> {
-    const filePath = uri.fsPath;
-    const parsed = path.parse(filePath);
-    const ext = parsed.ext.toLowerCase();
-    const sourceExt = DECOMPILE_EXT_MAP[ext];
-    if (!sourceExt) return;
+    const virtualUri = BRCompiledFS.toVirtualUri(uri.fsPath);
+    await vscode.commands.executeCommand("vscode.open", virtualUri);
+  }
+}
 
-    const sourcePath = path.join(parsed.dir, parsed.name + sourceExt);
-
-    if (fs.existsSync(sourcePath)) {
-      const doc = await vscode.workspace.openTextDocument(sourcePath);
-      await vscode.window.showTextDocument(doc, { preview: false });
-    } else {
-      await decompileBrProgram(filePath, this.context);
+class BRCompiledDecorator implements vscode.FileDecorationProvider {
+  provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
+    if (uri.scheme === "br-compiled") {
+      return {
+        badge: "O",
+        tooltip: "Compiled BR program",
+        color: new vscode.ThemeColor("charts.purple"),
+      };
     }
   }
 }
@@ -347,10 +595,72 @@ class CompiledBREditorProvider implements vscode.CustomReadonlyEditorProvider {
 export function activateDecompile(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel("BR Decompile");
 
+  const compiledFS = new BRCompiledFS(context);
   const editorProvider = new CompiledBREditorProvider(context);
+  const decorator = new BRCompiledDecorator();
+
+  // Warn when opening a .brs/.wbs from disk if the corresponding .br/.wb is newer
+  const warnedUris = new Set<string>();
+  function checkStaleSource(document: vscode.TextDocument): void {
+    if (document.uri.scheme !== "file") return;
+    const ext = path.extname(document.fileName).toLowerCase();
+    const compiledExt = EXT_MAP[ext];
+    if (!compiledExt) return;
+
+    const parsed = path.parse(document.fileName);
+    const compiledPath = path.join(parsed.dir, parsed.name + compiledExt);
+
+    let compiledMtime: number;
+    try {
+      compiledMtime = fs.statSync(compiledPath).mtimeMs;
+    } catch {
+      return; // no compiled file — nothing to warn about
+    }
+
+    let sourceMtime: number;
+    try {
+      sourceMtime = fs.statSync(document.fileName).mtimeMs;
+    } catch {
+      return;
+    }
+
+    if (compiledMtime <= sourceMtime) return;
+
+    const key = document.uri.toString();
+    if (warnedUris.has(key)) return;
+    warnedUris.add(key);
+
+    const compiledName = parsed.name + compiledExt;
+    vscode.window
+      .showWarningMessage(
+        `${compiledName} is newer than ${parsed.base}. The source file may be out of date.`,
+        "Open Compiled",
+        "Decompile",
+        "Dismiss",
+      )
+      .then((choice) => {
+        if (choice === "Open Compiled") {
+          const virtualUri = BRCompiledFS.toVirtualUri(compiledPath);
+          vscode.commands.executeCommand("vscode.open", virtualUri);
+        } else if (choice === "Decompile") {
+          decompileBrProgram(compiledPath, context);
+        }
+      });
+  }
+
+  // Check already-open editors and newly opened documents
+  for (const editor of vscode.window.visibleTextEditors) {
+    checkStaleSource(editor.document);
+  }
 
   context.subscriptions.push(
     outputChannel,
+    vscode.window.registerFileDecorationProvider(decorator),
+    vscode.workspace.onDidOpenTextDocument(checkStaleSource),
+    vscode.workspace.registerFileSystemProvider("br-compiled", compiledFS, {
+      isCaseSensitive: true,
+      isReadonly: false,
+    }),
     vscode.window.registerCustomEditorProvider("br-lsp.compiledBREditor", editorProvider, {
       supportsMultipleEditorsPerDocument: false,
     }),

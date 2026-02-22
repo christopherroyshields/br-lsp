@@ -139,6 +139,23 @@
       {
         "command": "br-lsp.toggleInspector",
         "title": "BR: Toggle Tree-Sitter Inspector"
+      },
+      {
+        "command": "br-lsp.addLineNumbers",
+        "title": "Lexi: Add Line Numbers"
+      },
+      {
+        "command": "br-lsp.stripLineNumbers",
+        "title": "Lexi: Strip Line Numbers"
+      }
+    ],
+    "resourceLabelFormatters": [
+      {
+        "scheme": "br-compiled",
+        "formatting": {
+          "label": "${path}",
+          "separator": "/"
+        }
       }
     ],
     "customEditors": [
@@ -203,6 +220,16 @@
       {
         "command": "br-lsp.toggleInspector",
         "key": "ctrl+shift+alt+i",
+        "when": "editorTextFocus && editorLangId == br"
+      },
+      {
+        "command": "br-lsp.addLineNumbers",
+        "key": "ctrl+alt+3",
+        "when": "editorTextFocus && editorLangId == br"
+      },
+      {
+        "command": "br-lsp.stripLineNumbers",
+        "key": "ctrl+alt+4",
         "when": "editorTextFocus && editorLangId == br"
       }
     ],
@@ -326,6 +353,7 @@
   },
   "activationEvents": [
     "onCustomEditor:br-lsp.compiledBREditor",
+    "onFileSystem:br-compiled",
     "onLanguage:br",
     "onLanguage:lay"
   ],
