@@ -65,8 +65,8 @@ fn walk_node(
 
     let child_in_dim = in_dim || kind == "dim_statement";
 
-    // Emit a keyword token for the hidden `mat` prefix in array nodes
-    if matches!(kind, "numberarray" | "stringarray") {
+    // Emit a keyword token for the hidden `mat` prefix in array nodes and mat statements
+    if matches!(kind, "numberarray" | "stringarray" | "mat_statement") {
         emit_mat_keyword(node, source, tokens);
     }
 
@@ -380,6 +380,17 @@ mod tests {
             .iter()
             .find(|t| t.token_type == 3 && t.token_modifiers_bitset == (1 << 3));
         assert!(mat_token.is_some(), "mat should be keyword+controlFlow");
+    }
+
+    #[test]
+    fn mat_statement_keyword_token() {
+        let source = "00100 mat x$(10)\n";
+        let tokens = parse_and_collect(source);
+        // The "mat" in a mat_statement should also be keyword+controlFlow
+        let mat_token = tokens
+            .iter()
+            .find(|t| t.token_type == 3 && t.token_modifiers_bitset == (1 << 3));
+        assert!(mat_token.is_some(), "mat in mat_statement should be keyword+controlFlow");
     }
 
     #[test]

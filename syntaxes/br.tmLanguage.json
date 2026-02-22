@@ -175,7 +175,7 @@
 						}
 					}
 				},{
-					"match": "(?:(?:^|\\r?\\n) *(\\d{1,5})? *([a-zA-Z_]\\w*: *)?|!: *|(?i)(then +|else +))(?i)(CHAIN|CLOSE|CONTINUE|DATA|DEF|DELETE|DIM|DISPLAY|END DEF|END IF|END|EXECUTE|EXIT|FIELDS|FNEND|FORM|GOSUB|GOTO|INPUT(\\s+FIELDS)?|KEY|LET|LIBRARY|LINPUT|MENU|MENU TEXT|MENU DATA|MENU STATUS|ON ERROR|ON FKEY|ON|OPEN|OPTION|PAUSE|PRINT(\\s+FIELDS)?|USING|BORDER|RANDOMIZE|READ|REREAD|RESTORE|RETRY|RETURN|REWRITE|RINPUT(\\s+FIELDS)?|SCR_FREEZE|SCR_THAW|SELECT|STOP|WRITE|TRACE|USE)(?!:)\\b",
+					"match": "(?:(?:^|\\r?\\n) *(\\d{1,5})? *([a-zA-Z_]\\w*: *)?|!: *|(?i)(then +|else +))(?i)(CHAIN|CLOSE|CONTINUE|DATA|DEF|DELETE|DIM|DISPLAY|END DEF|END IF|END|EXECUTE|EXIT|FIELDS|FNEND|FORM|GOSUB|GOTO|INPUT(\\s+FIELDS)?|KEY|LET|LIBRARY|LINPUT|MAT|MENU|MENU TEXT|MENU DATA|MENU STATUS|ON ERROR|ON FKEY|ON|OPEN|OPTION|PAUSE|PRINT(\\s+FIELDS)?|USING|BORDER|RANDOMIZE|READ|REREAD|RESTORE|RETRY|RETURN|REWRITE|RINPUT(\\s+FIELDS)?|SCR_FREEZE|SCR_THAW|SELECT|STOP|WRITE|TRACE|USE)(?!:)\\b",
 					"captures": {
 						"1": {
 							"name": "linenumber.br"
@@ -307,10 +307,6 @@
 				{
 					"match": "\\b(?i:COLLATE|OPTION)\\b",
 					"name": "keyword.option.br"
-				},
-				{
-					"match": "^\\s*(?i:MAT)\\b",
-					"name": "keyword.statement.br"
 				}
 			]
 		},

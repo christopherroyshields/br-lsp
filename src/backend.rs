@@ -1047,10 +1047,16 @@ impl LanguageServer for Backend {
         });
 
         if let Some(name) = fn_name {
-            // Only search cross-file if the function is declared as library
+            // Only search cross-file if the function is a library function.
+            // If the current file defines it as a non-library function, stay local
+            // even if other files have a library function with the same name.
             let is_library_fn = {
                 let index = self.workspace_index.read().await;
-                index.lookup(&name).iter().any(|d| d.def.is_library)
+                let defs = index.lookup(&name);
+                let local_non_library = defs
+                    .iter()
+                    .any(|d| d.uri.as_str() == uri_string && !d.def.is_import_only && !d.def.is_library);
+                !local_non_library && defs.iter().any(|d| d.def.is_library)
             };
 
             if is_library_fn {
@@ -1201,10 +1207,16 @@ impl LanguageServer for Backend {
         });
 
         if let Some(name) = fn_name {
-            // Only search cross-file if the function is declared as library
+            // Only search cross-file if the function is a library function.
+            // If the current file defines it as a non-library function, stay local
+            // even if other files have a library function with the same name.
             let is_library_fn = {
                 let index = self.workspace_index.read().await;
-                index.lookup(&name).iter().any(|d| d.def.is_library)
+                let defs = index.lookup(&name);
+                let local_non_library = defs
+                    .iter()
+                    .any(|d| d.uri.as_str() == uri_string && !d.def.is_import_only && !d.def.is_library);
+                !local_non_library && defs.iter().any(|d| d.def.is_library)
             };
 
             if is_library_fn {
@@ -2177,43 +2189,15 @@ fn format_builtin_hover(builtins: &[builtins::BuiltinFunction]) -> String {
 }
 
 fn format_user_hover_multi(defs: &[&workspace::IndexedFunctionDef]) -> String {
-    // Filter out import-only, deduplicate by signature string
-    let mut seen = std::collections::HashSet::new();
-    let unique: Vec<&&workspace::IndexedFunctionDef> = defs
+    // Show only the first (highest priority) non-import-only definition
+    let best = defs
         .iter()
-        .filter(|d| !d.def.is_import_only)
-        .filter(|d| seen.insert(d.def.format_signature()))
-        .collect();
-
-    match unique.len() {
-        0 => {
-            // All entries are import-only; show the first one
-            match defs.first() {
-                Some(d) => format_user_hover(&d.def),
-                None => String::new(),
-            }
-        }
-        1 => format_user_hover(&unique[0].def),
-        _ => unique
-            .iter()
-            .map(|d| {
-                let mut md = format_user_hover(&d.def);
-                let filename = uri_filename(&d.uri);
-                md.push_str(&format!("\n\n*from* `{filename}`"));
-                md
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n---\n\n"),
+        .find(|d| !d.def.is_import_only)
+        .or(defs.first());
+    match best {
+        Some(d) => format_user_hover(&d.def),
+        None => String::new(),
     }
-}
-
-/// Extract the filename from a URI (e.g. "file:///path/to/foo.brs" → "foo.brs").
-fn uri_filename(uri: &Url) -> String {
-    uri.path()
-        .rsplit('/')
-        .next()
-        .unwrap_or(uri.as_str())
-        .to_string()
 }
 
 fn format_user_hover(def: &extract::FunctionDef) -> String {
