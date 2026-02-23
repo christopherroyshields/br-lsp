@@ -55,7 +55,25 @@
           ".brs",
           ".wbs"
         ],
+        "icon": {
+          "light": "./icons/light/file-brs.svg",
+          "dark": "./icons/dark/file-brs.svg"
+        },
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "br-compiled",
+        "aliases": [
+          "BR Compiled"
+        ],
+        "extensions": [
+          ".br",
+          ".wb"
+        ],
+        "icon": {
+          "light": "./icons/light/file-br.svg",
+          "dark": "./icons/dark/file-br.svg"
+        }
       },
       {
         "id": "lay",
