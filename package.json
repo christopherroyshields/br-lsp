@@ -20,6 +20,8 @@
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "package": "vsce package --no-dependencies",
+    "pretest": "tsc -p client/tsconfig.test.json",
+    "test": "node ./client/out/test/runTest.js",
     "lint": "oxlint -c oxlint.json .",
     "fmt": "oxfmt --write .",
     "fmt:check": "oxfmt --check ."

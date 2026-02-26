@@ -9,7 +9,7 @@ const LINE_NUMBER_RE = /^(\d+)\s/;
 const CONTINUATION_RE = /!:\s*$/;
 const PREFERRED_INCREMENTS = [1, 2, 10, 20, 100];
 
-function extractLineNumber(lineText: string): LineNumberInfo | null {
+export function extractLineNumber(lineText: string): LineNumberInfo | null {
   const match = lineText.match(LINE_NUMBER_RE);
   if (!match) {
     return null;
@@ -22,7 +22,7 @@ function extractLineNumber(lineText: string): LineNumberInfo | null {
   return { value, padding: text.length };
 }
 
-function findPreviousLineNumber(
+export function findPreviousLineNumber(
   document: vscode.TextDocument,
   startLine: number,
 ): { info: LineNumberInfo; line: number } | null {
@@ -35,7 +35,7 @@ function findPreviousLineNumber(
   return null;
 }
 
-function detectIncrement(document: vscode.TextDocument, currentLine: number, defaultIncrement: number): number {
+export function detectIncrement(document: vscode.TextDocument, currentLine: number, defaultIncrement: number): number {
   const lineNumbers: number[] = [];
   for (let i = currentLine - 1; i >= Math.max(0, currentLine - 10); i--) {
     const info = extractLineNumber(document.lineAt(i).text);
@@ -55,7 +55,7 @@ function detectIncrement(document: vscode.TextDocument, currentLine: number, def
   return defaultIncrement;
 }
 
-function selectIncrement(detected: number, maxSpace: number | null): number {
+export function selectIncrement(detected: number, maxSpace: number | null): number {
   if (maxSpace !== null) {
     if (maxSpace < 1) {
       return 0;
@@ -93,7 +93,7 @@ function selectIncrement(detected: number, maxSpace: number | null): number {
   return best;
 }
 
-function calculateNextLineNumber(
+export function calculateNextLineNumber(
   document: vscode.TextDocument,
   currentLine: number,
   configIncrement: number,

@@ -34,7 +34,10 @@
         "--extensionTestsPath=${workspaceRoot}/client/out/test/index",
         "${workspaceRoot}/client/testFixture"
       ],
-      "outFiles": ["${workspaceRoot}/client/out/test/**/*.js"]
+      "outFiles": ["${workspaceRoot}/client/out/test/**/*.js"],
+      "env": {
+        "SERVER_PATH": "${workspaceRoot}/target/debug/br-lsp"
+      }
     }
   ],
   "compounds": [
