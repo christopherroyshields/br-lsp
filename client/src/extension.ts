@@ -85,9 +85,9 @@ export async function activate(context: ExtensionContext) {
   );
   await client.start();
 
-  const scanAllCmd = commands.registerCommand("br-lsp.scanAll", async () => {
+  const scanAllCmd = commands.registerCommand("br.scanAll", async () => {
     const result = await client.sendRequest<{ summary: string; csv: string }>("workspace/executeCommand", {
-      command: "br-lsp.scanAll",
+      command: "br.scanAll",
       arguments: [],
     });
 

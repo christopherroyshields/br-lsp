@@ -40,7 +40,7 @@ function hasLineNumbers(filePath: string): boolean {
   return /^\s*\d{3,5}\s/.test(firstLine);
 }
 
-interface PrcPaths {
+export interface PrcPaths {
   sourceBase: string; // e.g. "3_test2.brs" — source copy in tmp/
   tempFile: string; // e.g. "temp3" — Lexi preprocessor output in tmp/
   outputBase: string; // e.g. "3_test2" — compiled output name (no ext) in tmp/
@@ -48,7 +48,7 @@ interface PrcPaths {
   hasNumbers: boolean;
 }
 
-function generatePrc(p: PrcPaths): string {
+export function generatePrc(p: PrcPaths): string {
   // BR uses backslash paths internally even on Linux.
   // Always run through the Lexi preprocessor (fnApplyLexi from lexi.br) which
   // handles line continuation, backtick strings, #SELECT#/#CASE#, #DEFINE#, etc.
@@ -451,14 +451,14 @@ export function activateCompile(context: vscode.ExtensionContext) {
   rawOutputChannel = vscode.window.createOutputChannel("BR Compile (Raw)");
 
   autoCompileStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  autoCompileStatusBarItem.command = "br-lsp.toggleAutoCompile";
+  autoCompileStatusBarItem.command = "br.toggleAutoCompile";
   updateStatusBar();
 
   context.subscriptions.push(
     outputChannel,
     rawOutputChannel,
     autoCompileStatusBarItem,
-    vscode.commands.registerCommand("br-lsp.compile", async () => {
+    vscode.commands.registerCommand("br.compile", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
         vscode.window.showErrorMessage("No active editor");
@@ -479,7 +479,7 @@ export function activateCompile(context: vscode.ExtensionContext) {
 
       await compileBrProgram(filename, context, true);
     }),
-    vscode.commands.registerCommand("br-lsp.toggleAutoCompile", toggleAutoCompile),
+    vscode.commands.registerCommand("br.toggleAutoCompile", toggleAutoCompile),
     vscode.window.onDidChangeActiveTextEditor(() => updateStatusBar()),
     vscode.workspace.onDidSaveTextDocument(async (document) => {
       if (document.languageId !== "br") {

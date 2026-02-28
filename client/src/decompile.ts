@@ -3,10 +3,22 @@ import * as path from "path";
 import * as fs from "fs";
 import { EXT_MAP, getLexiPath, runBr } from "./compile";
 
-const DECOMPILE_EXT_MAP: Record<string, string> = {
+const DEFAULT_EXT_MAP: Record<string, string> = {
   ".br": ".brs",
+  ".bro": ".brs",
   ".wb": ".wbs",
+  ".wbo": ".wbs",
 };
+
+function getExtMap(): Record<string, string> {
+  const config = vscode.workspace.getConfiguration("br");
+  return config.get<Record<string, string>>("decompile.sourceExtensions", DEFAULT_EXT_MAP);
+}
+
+function getStyleCommand(): string {
+  const config = vscode.workspace.getConfiguration("br");
+  return config.get<string>("decompile.styleCommand", "indent 2 45 keywords lower labels mixed comments mixed");
+}
 
 let outputChannel: vscode.OutputChannel;
 let decompileId = 0;
@@ -15,9 +27,10 @@ async function decompileBrProgram(
   compiledFile: string,
   context: vscode.ExtensionContext,
 ): Promise<void> {
+  const extMap = getExtMap();
   const parsed = path.parse(compiledFile);
   const inputExt = parsed.ext.toLowerCase();
-  const outputExt = DECOMPILE_EXT_MAP[inputExt];
+  const outputExt = extMap[inputExt];
   if (!outputExt) {
     vscode.window.showErrorMessage(`Unsupported file extension: ${inputExt}`);
     return;
@@ -50,14 +63,19 @@ async function decompileBrProgram(
     fs.mkdirSync(tmpDir, { recursive: true });
   }
 
-  // Generate proc file: load the compiled program, then list > to decompile
-  const prcContent = [
+  // Generate proc file: load the compiled program, apply style, then list > to decompile
+  const prcLines = [
     "proc noecho",
     `load ":${compiledFile}"`,
-    `list >":${tmpOutputPath}"`,
-    "system",
-    "",
-  ].join("\n");
+  ];
+  const styleCmd = getStyleCommand();
+  if (styleCmd) {
+    prcLines.push(`style ${styleCmd}`);
+  }
+  prcLines.push(`list >":${tmpOutputPath}"`);
+  prcLines.push("system");
+  prcLines.push("");
+  const prcContent = prcLines.join("\n");
 
   const startTime = Date.now();
   outputChannel.appendLine("");
@@ -156,7 +174,8 @@ async function decompileFolder(
     async (progress) => {
       progress.report({ message: "Scanning for compiled BR files..." });
 
-      const compiledExtensions = Object.keys(DECOMPILE_EXT_MAP);
+      const extMap = getExtMap();
+      const compiledExtensions = Object.keys(extMap);
       const compiledFiles = findFilesRecursive(folderPath, compiledExtensions);
 
       if (compiledFiles.length === 0) {
@@ -180,7 +199,7 @@ async function decompileFolder(
       for (const compiledPath of compiledFiles) {
         const parsed = path.parse(compiledPath);
         const inputExt = parsed.ext.toLowerCase();
-        const outputExt = DECOMPILE_EXT_MAP[inputExt];
+        const outputExt = extMap[inputExt];
         if (!outputExt) continue;
 
         const sourcePath = path.join(parsed.dir, parsed.name + outputExt);
@@ -212,10 +231,14 @@ async function decompileFolder(
         fs.mkdirSync(tmpDir, { recursive: true });
       }
 
-      // Build single .prc with all load/list pairs
+      // Build single .prc with all load/style/list sequences
       const prcLines = ["proc noecho"];
+      const styleCmd = getStyleCommand();
       for (const file of filesToDecompile) {
         prcLines.push(`load ":${file.compiledPath}"`);
+        if (styleCmd) {
+          prcLines.push(`style ${styleCmd}`);
+        }
         prcLines.push(`list >":${file.tmpOutputPath}"`);
       }
       prcLines.push("system");
@@ -661,10 +684,10 @@ export function activateDecompile(context: vscode.ExtensionContext) {
       isCaseSensitive: true,
       isReadonly: false,
     }),
-    vscode.window.registerCustomEditorProvider("br-lsp.compiledBREditor", editorProvider, {
+    vscode.window.registerCustomEditorProvider("br.compiledBREditor", editorProvider, {
       supportsMultipleEditorsPerDocument: false,
     }),
-    vscode.commands.registerCommand("br-lsp.decompile", async (uri?: vscode.Uri) => {
+    vscode.commands.registerCommand("br.decompile", async (uri?: vscode.Uri) => {
       let filename: string;
       if (uri) {
         filename = uri.fsPath;
@@ -678,14 +701,14 @@ export function activateDecompile(context: vscode.ExtensionContext) {
       }
 
       const ext = path.extname(filename).toLowerCase();
-      if (!DECOMPILE_EXT_MAP[ext]) {
-        vscode.window.showErrorMessage("Selected file is not a compiled BR program (.br or .wb)");
+      if (!getExtMap()[ext]) {
+        vscode.window.showErrorMessage("Selected file is not a compiled BR program");
         return;
       }
 
       await decompileBrProgram(filename, context);
     }),
-    vscode.commands.registerCommand("br-lsp.decompileFolder", async (uri?: vscode.Uri) => {
+    vscode.commands.registerCommand("br.decompileFolder", async (uri?: vscode.Uri) => {
       let targetFolder: string | undefined;
       if (uri) {
         targetFolder = uri.fsPath;

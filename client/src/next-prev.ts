@@ -4,7 +4,7 @@ const BrWordRegex = /\w+\$?/;
 
 export function activateNextPrev(context: vscode.ExtensionContext) {
   context.subscriptions.push(
-    vscode.commands.registerTextEditorCommand("br-lsp.nextOccurrence", (editor) => {
+    vscode.commands.registerTextEditorCommand("br.nextOccurrence", (editor) => {
       const cursorWordRange = editor.document.getWordRangeAtPosition(editor.selection.start, BrWordRegex);
       if (cursorWordRange !== undefined) {
         editor.selection = new vscode.Selection(cursorWordRange.start, cursorWordRange.end);
@@ -27,7 +27,7 @@ export function activateNextPrev(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerTextEditorCommand("br-lsp.prevOccurrence", (editor) => {
+    vscode.commands.registerTextEditorCommand("br.prevOccurrence", (editor) => {
       const cursorWordRange = editor.document.getWordRangeAtPosition(editor.selection.start, BrWordRegex);
       if (cursorWordRange !== undefined) {
         editor.selection = new vscode.Selection(cursorWordRange.start, cursorWordRange.end);

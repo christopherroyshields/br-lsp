@@ -69,7 +69,7 @@ function loadLaunchConfigurations(): BrLaunchConfiguration[] {
   }
 }
 
-function resolveVariables(
+export function resolveVariables(
   str: string,
   activeFile: string | undefined,
   context: vscode.ExtensionContext,
@@ -495,7 +495,7 @@ async function runBrProgram(
 
 export function activateRun(context: vscode.ExtensionContext) {
   context.subscriptions.push(
-    vscode.commands.registerCommand("br-lsp.run", async () => {
+    vscode.commands.registerCommand("br.run", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
         vscode.window.showErrorMessage("No active editor");
@@ -511,7 +511,7 @@ export function activateRun(context: vscode.ExtensionContext) {
 
       await runBrProgram(filename, context);
     }),
-    vscode.commands.registerCommand("br-lsp.selectLaunchConfig", async () => {
+    vscode.commands.registerCommand("br.selectLaunchConfig", async () => {
       await selectLaunchConfiguration(context);
     }),
   );

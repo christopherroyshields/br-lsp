@@ -151,8 +151,8 @@ export function activateLineNumbers(context: vscode.ExtensionContext) {
   let hasShownOverflowWarning = false;
 
   context.subscriptions.push(
-    vscode.commands.registerTextEditorCommand("br-lsp.autoInsertLineNumber", (editor, edit) => {
-      const config = vscode.workspace.getConfiguration("br-lsp");
+    vscode.commands.registerTextEditorCommand("br.autoInsertLineNumber", (editor, edit) => {
+      const config = vscode.workspace.getConfiguration("br");
       const enabled = config.get<boolean>("autoLineNumbers.enabled", true);
 
       const position = editor.selection.active;

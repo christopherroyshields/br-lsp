@@ -1,5 +1,5 @@
 import * as assert from "assert";
-import { parseBrOutput, parseBrState, stripAnsi } from "../../compile";
+import { parseBrOutput, parseBrState, stripAnsi, generatePrc, PrcPaths } from "../../compile";
 
 suite("parseBrOutput", () => {
   test("full error format with clause", () => {
@@ -103,6 +103,103 @@ suite("parseBrState", () => {
     assert.strictEqual(parseBrState("UNKNOWN"), null);
     assert.strictEqual(parseBrState(""), null);
     assert.strictEqual(parseBrState("some random text"), null);
+  });
+});
+
+suite("generatePrc", () => {
+  test("numbered source uses lexionly.brs", () => {
+    const prc = generatePrc({
+      sourceBase: "1_test.brs",
+      tempFile: "temp1",
+      outputBase: "1_test",
+      outputExt: ".br",
+      hasNumbers: true,
+    });
+    assert.ok(prc.includes("subproc lexionly.brs"));
+    assert.ok(!prc.includes("linenum.brs"));
+  });
+
+  test("unnumbered source uses linenum.brs", () => {
+    const prc = generatePrc({
+      sourceBase: "2_test.brs",
+      tempFile: "temp2",
+      outputBase: "2_test",
+      outputExt: ".br",
+      hasNumbers: false,
+    });
+    assert.ok(prc.includes("subproc linenum.brs"));
+    assert.ok(!prc.includes("lexionly.brs"));
+  });
+
+  test("uses backslash paths regardless of platform", () => {
+    const prc = generatePrc({
+      sourceBase: "3_test.brs",
+      tempFile: "temp3",
+      outputBase: "3_test",
+      outputExt: ".br",
+      hasNumbers: true,
+    });
+    assert.ok(prc.includes('Infile$="tmp\\3_test.brs"'));
+    assert.ok(prc.includes('Outfile$="tmp\\temp3"'));
+    assert.ok(prc.includes("subproc tmp\\temp3"));
+    // No forward slashes in generated paths
+    assert.ok(!prc.includes("tmp/"));
+  });
+
+  test("variable assignments on lines 00025/00026", () => {
+    const prc = generatePrc({
+      sourceBase: "src.brs",
+      tempFile: "tmp1",
+      outputBase: "src",
+      outputExt: ".br",
+      hasNumbers: false,
+    });
+    assert.ok(prc.includes("00025 Infile$="));
+    assert.ok(prc.includes("00026 Outfile$="));
+  });
+
+  test("contains proc structure", () => {
+    const prc = generatePrc({
+      sourceBase: "x.brs",
+      tempFile: "t1",
+      outputBase: "x",
+      outputExt: ".br",
+      hasNumbers: true,
+    });
+    const lines = prc.split("\n").filter((l) => l.length > 0);
+    assert.strictEqual(lines[0], "proc noecho");
+    assert.ok(lines.some((l) => l.startsWith("subproc ")));
+    assert.ok(lines.includes("run"));
+    assert.ok(lines.includes("clear"));
+    assert.ok(lines.includes("system"));
+  });
+
+  test("save/replace logic with exists check", () => {
+    const prc = generatePrc({
+      sourceBase: "f.brs",
+      tempFile: "tf",
+      outputBase: "f",
+      outputExt: ".br",
+      hasNumbers: false,
+    });
+    assert.ok(prc.includes('skip PROGRAM_REPLACE if exists("tmp\\f")'));
+    assert.ok(prc.includes('skip PROGRAM_REPLACE if exists("tmp\\f.br")'));
+    assert.ok(prc.includes('save "tmp\\f.br"'));
+    assert.ok(prc.includes(":PROGRAM_REPLACE"));
+    assert.ok(prc.includes('replace "tmp\\f.br"'));
+  });
+
+  test("handles .wbs/.wb extension", () => {
+    const prc = generatePrc({
+      sourceBase: "page.wbs",
+      tempFile: "temp4",
+      outputBase: "page",
+      outputExt: ".wb",
+      hasNumbers: true,
+    });
+    assert.ok(prc.includes('Infile$="tmp\\page.wbs"'));
+    assert.ok(prc.includes('save "tmp\\page.wb"'));
+    assert.ok(prc.includes('replace "tmp\\page.wb"'));
   });
 });
 

@@ -35,7 +35,7 @@ let statusBarItem: StatusBarItem | undefined;
 
 export function activateInspector(context: ExtensionContext, client: LanguageClient) {
   context.subscriptions.push(
-    commands.registerCommand("br-lsp.toggleInspector", () => {
+    commands.registerCommand("br.toggleInspector", () => {
       if (active) {
         disable();
       } else {
@@ -53,7 +53,7 @@ function enable(client: LanguageClient) {
       let result: InspectNodeResult | null;
       try {
         result = await client.sendRequest<InspectNodeResult | null>("workspace/executeCommand", {
-          command: "br-lsp.inspectNode",
+          command: "br.inspectNode",
           arguments: [document.uri.toString(), position.line, position.character],
         });
       } catch {
@@ -79,7 +79,7 @@ function enable(client: LanguageClient) {
   );
 
   statusBarItem = window.createStatusBarItem(StatusBarAlignment.Right, 100);
-  statusBarItem.command = "br-lsp.toggleInspector";
+  statusBarItem.command = "br.toggleInspector";
   statusBarItem.text = "$(telescope) Inspector ON";
   statusBarItem.tooltip = "Tree-sitter Inspector (click to toggle)";
   statusBarItem.show();

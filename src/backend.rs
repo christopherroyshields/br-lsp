@@ -142,7 +142,7 @@ impl Backend {
     async fn pull_diagnostics_config(&self) {
         let items = vec![ConfigurationItem {
             scope_uri: None,
-            section: Some("br-lsp.diagnostics".to_string()),
+            section: Some("br.diagnostics".to_string()),
         }];
 
         let values = match self.client.configuration(items).await {
@@ -1893,11 +1893,11 @@ impl LanguageServer for Backend {
     }
 
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
-        if params.command != "br-lsp.inspectNode" {
+        if params.command != "br.inspectNode" {
             debug!("command executed: {}", params.command);
         }
 
-        if params.command == "br-lsp.scanAll" {
+        if params.command == "br.scanAll" {
             let start = std::time::Instant::now();
             let folders = self.workspace_folders.read().await.clone();
             let config = self.diagnostics_config.read().await.clone();
@@ -1941,7 +1941,7 @@ impl LanguageServer for Backend {
             })));
         }
 
-        if params.command == "br-lsp.inspectNode" {
+        if params.command == "br.inspectNode" {
             let args = params.arguments;
             let uri_str = args.first().and_then(|v| v.as_str()).unwrap_or_default();
             let line = args.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
