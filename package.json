@@ -1,14 +1,16 @@
 {
   "name": "br-lsp",
   "displayName": "BR Language Server",
+  "publisher": "crs-dev",
   "version": "0.1.0",
   "description": "Language server for the Business Rules (BR) programming language",
+  "icon": "logo.png",
   "categories": [],
   "keywords": [
     "br",
     "business-rules",
     "language-server",
-    "tower-lsp"
+    "lsp"
   ],
   "license": "MIT",
   "main": "./dist/extension.js",
@@ -68,7 +70,9 @@
         ],
         "extensions": [
           ".br",
-          ".wb"
+          ".bro",
+          ".wb",
+          ".wbo"
         ],
         "icon": {
           "light": "./icons/light/file-br.svg",
@@ -132,47 +136,47 @@
     },
     "commands": [
       {
-        "command": "br-lsp.scanAll",
+        "command": "br.scanAll",
         "title": "BR: Scan All Project Source"
       },
       {
-        "command": "br-lsp.nextOccurrence",
+        "command": "br.nextOccurrence",
         "title": "BR: Next Occurrence"
       },
       {
-        "command": "br-lsp.prevOccurrence",
+        "command": "br.prevOccurrence",
         "title": "BR: Previous Occurrence"
       },
       {
-        "command": "br-lsp.autoInsertLineNumber",
+        "command": "br.autoInsertLineNumber",
         "title": "BR: Auto Insert Line Number"
       },
       {
-        "command": "br-lsp.compile",
+        "command": "br.compile",
         "title": "BR: Compile Program"
       },
       {
-        "command": "br-lsp.toggleAutoCompile",
+        "command": "br.toggleAutoCompile",
         "title": "BR: Toggle Auto-Compile on Save"
       },
       {
-        "command": "br-lsp.run",
+        "command": "br.run",
         "title": "BR: Run Program"
       },
       {
-        "command": "br-lsp.selectLaunchConfig",
+        "command": "br.selectLaunchConfig",
         "title": "BR: Select Launch Configuration"
       },
       {
-        "command": "br-lsp.decompile",
+        "command": "br.decompile",
         "title": "BR: Decompile Program"
       },
       {
-        "command": "br-lsp.decompileFolder",
+        "command": "br.decompileFolder",
         "title": "BR: Decompile All Programs in Folder"
       },
       {
-        "command": "br-lsp.toggleInspector",
+        "command": "br.toggleInspector",
         "title": "BR: Toggle Tree-Sitter Inspector"
       },
       {
@@ -214,14 +218,20 @@
     ],
     "customEditors": [
       {
-        "viewType": "br-lsp.compiledBREditor",
+        "viewType": "br.compiledBREditor",
         "displayName": "BR Compiled File Handler",
         "selector": [
           {
             "filenamePattern": "*.br"
           },
           {
+            "filenamePattern": "*.bro"
+          },
+          {
             "filenamePattern": "*.wb"
+          },
+          {
+            "filenamePattern": "*.wbo"
           }
         ],
         "priority": "default"
@@ -247,12 +257,12 @@
       ],
       "explorer/context": [
         {
-          "command": "br-lsp.decompile",
-          "when": "resourceExtname == .br || resourceExtname == .wb",
+          "command": "br.decompile",
+          "when": "resourceExtname == .br || resourceExtname == .bro || resourceExtname == .wb || resourceExtname == .wbo",
           "group": "navigation"
         },
         {
-          "command": "br-lsp.decompileFolder",
+          "command": "br.decompileFolder",
           "when": "explorerResourceIsFolder",
           "group": "navigation"
         }
@@ -260,36 +270,36 @@
     },
     "keybindings": [
       {
-        "command": "br-lsp.scanAll",
+        "command": "br.scanAll",
         "key": "ctrl+alt+7"
       },
       {
-        "command": "br-lsp.nextOccurrence",
+        "command": "br.nextOccurrence",
         "key": "ctrl+shift+down",
         "when": "editorTextFocus && editorLangId == br"
       },
       {
-        "command": "br-lsp.prevOccurrence",
+        "command": "br.prevOccurrence",
         "key": "ctrl+shift+up",
         "when": "editorTextFocus && editorLangId == br"
       },
       {
-        "command": "br-lsp.compile",
+        "command": "br.compile",
         "key": "ctrl+shift+b",
         "when": "editorTextFocus && editorLangId == br"
       },
       {
-        "command": "br-lsp.run",
+        "command": "br.run",
         "key": "ctrl+shift+r",
         "when": "editorTextFocus && editorLangId == br"
       },
       {
-        "command": "br-lsp.autoInsertLineNumber",
+        "command": "br.autoInsertLineNumber",
         "key": "enter",
         "when": "editorTextFocus && editorLangId == br && !suggestWidgetVisible && !renameInputVisible && !inSnippetMode && !quickFixWidgetVisible"
       },
       {
-        "command": "br-lsp.toggleInspector",
+        "command": "br.toggleInspector",
         "key": "ctrl+shift+alt+i",
         "when": "editorTextFocus && editorLangId == br"
       },
@@ -363,51 +373,71 @@
     },
     "configuration": {
       "type": "object",
-      "title": "BR Language Server",
+      "title": "Business Rules",
       "properties": {
-        "br-lsp.autoLineNumbers.enabled": {
+        "br.autoLineNumbers.enabled": {
           "type": "boolean",
           "scope": "resource",
           "default": true,
           "description": "Automatically add line numbers when pressing Enter if the current line has a line number."
         },
-        "br-lsp.autoLineNumbers.increment": {
+        "br.autoLineNumbers.increment": {
           "type": "number",
           "scope": "resource",
           "default": 10,
           "description": "Default increment for auto-generated line numbers. Will be overridden by detected pattern from surrounding lines."
         },
-        "br-lsp.autoLineNumbers.zeroPadding": {
+        "br.autoLineNumbers.zeroPadding": {
           "type": "number",
           "scope": "resource",
           "default": 5,
           "description": "Number of digits for line numbers (e.g., 5 for '00100'). Will be overridden by detected padding from surrounding lines."
         },
-        "br-lsp.diagnostics.syntax": {
+        "br.diagnostics.syntax": {
           "type": "boolean",
           "scope": "resource",
           "default": true,
           "description": "Report syntax errors from the tree-sitter parser."
         },
-        "br-lsp.diagnostics.functions": {
+        "br.diagnostics.functions": {
           "type": "boolean",
           "scope": "resource",
           "default": true,
           "description": "Report function diagnostics (missing FNEND, duplicate functions, parameter count/type mismatches)."
         },
-        "br-lsp.diagnostics.undefinedFunctions": {
+        "br.diagnostics.undefinedFunctions": {
           "type": "boolean",
           "scope": "resource",
           "default": true,
           "description": "Report calls to functions not defined in the workspace."
         },
-        "br-lsp.diagnostics.unusedVariables": {
+        "br.diagnostics.unusedVariables": {
           "type": "boolean",
           "scope": "resource",
           "default": true,
           "description": "Report unused DIM variables and unused LIBRARY imports."
         },
-        "br-lsp.trace.server": {
+        "br.decompile.sourceExtensions": {
+          "type": "object",
+          "scope": "resource",
+          "default": {
+            ".br": ".brs",
+            ".bro": ".brs",
+            ".wb": ".wbs",
+            ".wbo": ".wbs"
+          },
+          "description": "Map of compiled file extensions to their source equivalents, used during decompilation.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "br.decompile.styleCommand": {
+          "type": "string",
+          "scope": "resource",
+          "default": "indent 2 45 keywords lower labels mixed comments mixed",
+          "description": "BR style command arguments applied after decompiling. Leave empty to skip styling."
+        },
+        "br.trace.server": {
           "type": "string",
           "scope": "window",
           "enum": [
@@ -424,10 +454,16 @@
           "description": "Traces the communication between VS Code and the BR language server."
         }
       }
-    }
+    },
+    "jsonValidation": [
+      {
+        "fileMatch": ".vscode/launch.json",
+        "url": "./schemas/br-launch.json"
+      }
+    ]
   },
   "activationEvents": [
-    "onCustomEditor:br-lsp.compiledBREditor",
+    "onCustomEditor:br.compiledBREditor",
     "onFileSystem:br-compiled",
     "onLanguage:br",
     "onLanguage:lay"
