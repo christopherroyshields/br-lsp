@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <!-- Noise/speckle texture -->
+    <filter id="noise">
+      <feTurbulence type="fractalNoise" baseFrequency="0.55" numOctaves="3" stitchTiles="stitch" result="noise"/>
+      <feColorMatrix in="noise" type="saturate" values="0" result="gray-noise"/>
+      <feBlend in="SourceGraphic" in2="gray-noise" mode="multiply" result="noisy"/>
+    </filter>
+    <!-- Clip path using scaled BR letter shapes -->
+    <clipPath id="br-letters">
+      <!-- B letter -->
+      <path transform="translate(40, 52)" d="
+        M 0,0 L 55,0 Q 70,0 70,20 Q 70,35 58,39
+        Q 73,43 73,63 Q 73,82 55,82 L 0,82 Z
+        M 20,16 L 20,33 L 47,33 Q 53,33 53,25 Q 53,16 47,16 Z
+        M 20,49 L 20,66 L 50,66 Q 56,66 56,58 Q 56,49 50,49 Z
+      "/>
+      <!-- R letter -->
+      <path transform="translate(125, 52)" d="
+        M 0,0 L 55,0 Q 73,0 73,28 Q 73,45 60,50 L 78,82 L 56,82 L 40,53 L 20,53 L 20,82 L 0,82 Z
+        M 20,16 L 20,38 L 48,38 Q 55,38 55,27 Q 55,16 48,16 Z
+      "/>
+    </clipPath>
+  </defs>
+
+  <!-- ╔══════════════════════════════════════╗ -->
+  <!-- Terminal window border using line-draw style -->
+  <!-- Double-line outer border -->
+  <g fill="none" stroke="#599D8E" stroke-width="2">
+    <!-- Outer box -->
+    <line x1="12" y1="10" x2="244" y2="10"/>
+    <line x1="12" y1="12" x2="244" y2="12"/>
+    <line x1="12" y1="246" x2="244" y2="246"/>
+    <line x1="12" y1="244" x2="244" y2="244"/>
+    <line x1="10" y1="12" x2="10" y2="244"/>
+    <line x1="12" y1="12" x2="12" y2="244"/>
+    <line x1="246" y1="12" x2="246" y2="244"/>
+    <line x1="244" y1="12" x2="244" y2="244"/>
+  </g>
+  <!-- Corner pieces ╔ ╗ ╚ ╝ -->
+  <g fill="#599D8E">
+    <!-- Top-left ╔ -->
+    <rect x="10" y="10" width="4" height="2"/>
+    <rect x="10" y="12" width="2" height="2"/>
+    <!-- Top-right ╗ -->
+    <rect x="242" y="10" width="4" height="2"/>
+    <rect x="244" y="12" width="2" height="2"/>
+    <!-- Bottom-left ╚ -->
+    <rect x="10" y="244" width="4" height="2"/>
+    <rect x="10" y="242" width="2" height="2"/>
+    <!-- Bottom-right ╝ -->
+    <rect x="242" y="244" width="4" height="2"/>
+    <rect x="244" y="242" width="2" height="2"/>
+  </g>
+
+  <!-- Title bar ═══╡ BR Extension ╞═══ -->
+  <!-- Horizontal double line for title bar separator -->
+  <line x1="12" y1="30" x2="244" y2="30" stroke="#599D8E" stroke-width="1"/>
+  <line x1="12" y1="32" x2="244" y2="32" stroke="#599D8E" stroke-width="1"/>
+  <!-- Title bar text -->
+  <text x="128" y="25" text-anchor="middle" font-family="monospace, 'Courier New'" font-size="10" fill="#7AC3B7"> BR Extension </text>
+  <!-- ╞ ╡ brackets around title -->
+  <line x1="52" y1="28" x2="52" y2="34" stroke="#599D8E" stroke-width="1"/>
+  <line x1="50" y1="30" x2="52" y2="30" stroke="#599D8E" stroke-width="1"/>
+  <line x1="50" y1="32" x2="52" y2="32" stroke="#599D8E" stroke-width="1"/>
+  <line x1="204" y1="28" x2="204" y2="34" stroke="#599D8E" stroke-width="1"/>
+  <line x1="204" y1="30" x2="206" y2="30" stroke="#599D8E" stroke-width="1"/>
+  <line x1="204" y1="32" x2="206" y2="32" stroke="#599D8E" stroke-width="1"/>
+
+  <!-- Stripes clipped to the BR letter shapes -->
+  <g clip-path="url(#br-letters)">
+    <!-- Red -->
+    <rect x="0" y="52" width="256" height="10" fill="#E71E2D"/>
+    <!-- Orange -->
+    <rect x="0" y="66" width="256" height="10" fill="#EA7138"/>
+    <!-- Gold -->
+    <rect x="0" y="80" width="256" height="10" fill="#cfa044"/>
+    <!-- Sage -->
+    <rect x="0" y="94" width="256" height="10" fill="#7AC3B7"/>
+    <!-- Teal -->
+    <rect x="0" y="108" width="256" height="10" fill="#599D8E"/>
+    <!-- Dark teal -->
+    <rect x="0" y="122" width="256" height="10" fill="#336E62"/>
+
+    <!-- Grain overlay inside the letters -->
+    <rect x="0" y="52" width="256" height="90" filter="url(#noise)" opacity="0.12" fill="white"/>
+  </g>
+
+  <!-- Extension subtitle -->
+  <text x="128" y="148" text-anchor="middle" font-family="monospace, 'Courier New'" font-size="11" font-weight="bold" letter-spacing="5" fill="#62b0a0" opacity="0.8">EXTENSION</text>
+
+  <!-- Bottom status bar separator -->
+  <line x1="12" y1="224" x2="244" y2="224" stroke="#599D8E" stroke-width="1"/>
+  <line x1="12" y1="226" x2="244" y2="226" stroke="#599D8E" stroke-width="1"/>
+  <!-- Status bar text -->
+  <text x="24" y="239" font-family="monospace, 'Courier New'" font-size="8" fill="#599D8E" opacity="0.6">F1=Help</text>
+  <text x="232" y="239" text-anchor="end" font-family="monospace, 'Courier New'" font-size="8" fill="#599D8E" opacity="0.6">1:1</text>
+</svg>
