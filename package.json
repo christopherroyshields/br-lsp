@@ -1,8 +1,8 @@
 {
-  "name": "br-lsp",
-  "displayName": "BR Language Server",
+  "name": "vslang-br",
+  "displayName": "BR Language Extension",
   "publisher": "crs-dev",
-  "version": "0.1.0",
+  "version": "0.1.15",
   "description": "Language server for the Business Rules (BR) programming language",
   "icon": "logo.png",
   "categories": [],

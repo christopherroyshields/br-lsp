@@ -37,7 +37,7 @@ VS Code extension providing language intelligence, compile/run, and decompile su
 
 - Auto line numbering on Enter (configurable increment and padding)
 - Next/previous occurrence navigation (`Ctrl+Shift+Down`/`Up`)
-- Tree-sitter node inspector (`Ctrl+Shift+Alt+I`)
+- Tree-sitter node inspector for debugging language parsing (`Ctrl+Shift+Alt+I`)
 - Workspace-wide diagnostic scan with CSV export (`Ctrl+Alt+7`)
 - Code snippets for file I/O, Lexi, loops, and statements
 
