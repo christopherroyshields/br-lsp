@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "BR Debug attach configuration",
+  "type": "object",
+  "required": ["type", "request", "name", "port"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "br"
+    },
+    "request": {
+      "type": "string",
+      "const": "attach"
+    },
+    "name": {
+      "type": "string",
+      "description": "Configuration name"
+    },
+    "host": {
+      "type": "string",
+      "description": "Address to listen on",
+      "default": "127.0.0.1"
+    },
+    "port": {
+      "type": "integer",
+      "description": "TCP port to listen on. Run DEBUG CONNECT ip:port in BR.",
+      "default": 1583
+    },
+    "stopOnAttach": {
+      "type": "boolean",
+      "description": "Send FORCE BREAK immediately after attaching",
+      "default": true
+    }
+  },
+  "additionalProperties": false
+}

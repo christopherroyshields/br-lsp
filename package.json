@@ -455,6 +455,52 @@
         }
       }
     },
+    "breakpoints": [
+      { "language": "br" }
+    ],
+    "debuggers": [
+      {
+        "type": "br",
+        "languages": ["br"],
+        "label": "BR Debug",
+        "configurationAttributes": {
+          "attach": {
+            "required": ["port"],
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Address to listen on",
+                "default": "127.0.0.1"
+              },
+              "port": {
+                "type": "integer",
+                "description": "TCP port to listen on. Run DEBUG CONNECT ip:port in BR.",
+                "default": 1583
+              },
+              "stopOnAttach": {
+                "type": "boolean",
+                "description": "Send FORCE BREAK immediately after attaching",
+                "default": true
+              }
+            }
+          }
+        },
+        "configurationSnippets": [
+          {
+            "label": "BR: Attach to Debugger",
+            "description": "Start a debug server and wait for BR to connect",
+            "body": {
+              "type": "br",
+              "request": "attach",
+              "name": "Attach to BR",
+              "host": "127.0.0.1",
+              "port": 1583,
+              "stopOnAttach": true
+            }
+          }
+        ]
+      }
+    ],
     "jsonValidation": [
       {
         "fileMatch": ".vscode/launch.json",
