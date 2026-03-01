@@ -3,7 +3,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { EXT_MAP, getLexiPath, runBr } from "./compile";
 
-const DEFAULT_EXT_MAP: Record<string, string> = {
+export const DEFAULT_EXT_MAP: Record<string, string> = {
   ".br": ".brs",
   ".bro": ".brs",
   ".wb": ".wbs",
@@ -18,6 +18,37 @@ function getExtMap(): Record<string, string> {
 function getStyleCommand(): string {
   const config = vscode.workspace.getConfiguration("br");
   return config.get<string>("decompile.styleCommand", "indent 2 45 keywords lower labels mixed comments mixed");
+}
+
+export function generateDecompilePrc(compiledFile: string, tmpOutputPath: string, styleCmd: string): string {
+  const prcLines = [
+    "proc noecho",
+    `load ":${compiledFile}"`,
+  ];
+  if (styleCmd) {
+    prcLines.push(`style ${styleCmd}`);
+  }
+  prcLines.push(`list >":${tmpOutputPath}"`);
+  prcLines.push("system");
+  prcLines.push("");
+  return prcLines.join("\n");
+}
+
+export function generateBatchDecompilePrc(
+  files: { compiledPath: string; tmpOutputPath: string }[],
+  styleCmd: string,
+): string {
+  const prcLines = ["proc noecho"];
+  for (const file of files) {
+    prcLines.push(`load ":${file.compiledPath}"`);
+    if (styleCmd) {
+      prcLines.push(`style ${styleCmd}`);
+    }
+    prcLines.push(`list >":${file.tmpOutputPath}"`);
+  }
+  prcLines.push("system");
+  prcLines.push("");
+  return prcLines.join("\n");
 }
 
 let outputChannel: vscode.OutputChannel;
@@ -64,18 +95,7 @@ async function decompileBrProgram(
   }
 
   // Generate proc file: load the compiled program, apply style, then list > to decompile
-  const prcLines = [
-    "proc noecho",
-    `load ":${compiledFile}"`,
-  ];
-  const styleCmd = getStyleCommand();
-  if (styleCmd) {
-    prcLines.push(`style ${styleCmd}`);
-  }
-  prcLines.push(`list >":${tmpOutputPath}"`);
-  prcLines.push("system");
-  prcLines.push("");
-  const prcContent = prcLines.join("\n");
+  const prcContent = generateDecompilePrc(compiledFile, tmpOutputPath, getStyleCommand());
 
   const startTime = Date.now();
   outputChannel.appendLine("");
@@ -135,7 +155,7 @@ async function decompileBrProgram(
   await vscode.window.showTextDocument(doc);
 }
 
-function findFilesRecursive(dir: string, extensions: string[]): string[] {
+export function findFilesRecursive(dir: string, extensions: string[]): string[] {
   const results: string[] = [];
   try {
     const items = fs.readdirSync(dir);
@@ -232,17 +252,7 @@ async function decompileFolder(
       }
 
       // Build single .prc with all load/style/list sequences
-      const prcLines = ["proc noecho"];
-      const styleCmd = getStyleCommand();
-      for (const file of filesToDecompile) {
-        prcLines.push(`load ":${file.compiledPath}"`);
-        if (styleCmd) {
-          prcLines.push(`style ${styleCmd}`);
-        }
-        prcLines.push(`list >":${file.tmpOutputPath}"`);
-      }
-      prcLines.push("system");
-      prcLines.push("");
+      const prcLines = generateBatchDecompilePrc(filesToDecompile, getStyleCommand());
 
       const prcFileName = `tmp/decompile-batch${tag}.prc`;
       const prcPath = path.join(lexiPath, prcFileName);
@@ -255,7 +265,7 @@ async function decompileFolder(
       outputChannel.show(true);
 
       try {
-        fs.writeFileSync(prcPath, prcLines.join("\n"));
+        fs.writeFileSync(prcPath, prcLines);
       } catch (error: any) {
         vscode.window.showErrorMessage(`Failed to create procedure file: ${error.message}`);
         return;
@@ -335,14 +345,15 @@ class BRCompiledFS implements vscode.FileSystemProvider {
   static toVirtualUri(compiledFsPath: string): vscode.Uri {
     const parsed = path.parse(compiledFsPath);
     const ext = parsed.ext.toLowerCase();
-    const sourceExt = DECOMPILE_EXT_MAP[ext];
+    const sourceExt = getExtMap()[ext];
     if (!sourceExt) throw new Error(`Unsupported extension: ${ext}`);
     const virtualPath = path.join(parsed.dir, parsed.name + sourceExt);
-    return vscode.Uri.from({ scheme: "br-compiled", path: virtualPath });
+    const fileUri = vscode.Uri.file(virtualPath);
+    return fileUri.with({ scheme: "br-compiled" });
   }
 
   static toRealPath(uri: vscode.Uri): string {
-    const parsed = path.parse(uri.path);
+    const parsed = path.parse(uri.fsPath);
     const ext = parsed.ext.toLowerCase();
     const compiledExt = EXT_MAP[ext];
     if (!compiledExt) throw new Error(`Unsupported extension: ${ext}`);
@@ -361,17 +372,26 @@ class BRCompiledFS implements vscode.FileSystemProvider {
     } catch {
       throw vscode.FileSystemError.FileNotFound(uri);
     }
+    const sourcePath = uri.fsPath;
+    const sourceExists = fs.existsSync(sourcePath);
+    const fileStat = sourceExists ? fs.statSync(sourcePath) : realStat;
     const cached = this.cache.get(realPath);
     return {
       type: vscode.FileType.File,
-      ctime: realStat.ctimeMs,
-      mtime: realStat.mtimeMs,
-      size: cached ? cached.content.byteLength : realStat.size,
+      ctime: fileStat.ctimeMs,
+      mtime: fileStat.mtimeMs,
+      size: cached ? cached.content.byteLength : fileStat.size,
     };
   }
 
   async readFile(uri: vscode.Uri): Promise<Uint8Array> {
     const realPath = BRCompiledFS.toRealPath(uri);
+
+    // If the source file exists on disk, read it directly (skip decompilation)
+    const sourcePath = uri.fsPath;
+    if (fs.existsSync(sourcePath)) {
+      return new Uint8Array(fs.readFileSync(sourcePath));
+    }
 
     let mtimeMs: number;
     try {
@@ -406,7 +426,7 @@ class BRCompiledFS implements vscode.FileSystemProvider {
     const tag = String(decompileId++);
     const lexiPath = getLexiPath(this.context);
     const tmpDir = path.join(lexiPath, "tmp");
-    const parsed = path.parse(uri.path);
+    const parsed = path.parse(uri.fsPath);
     const prcFileName = `tmp/vfs-decompile${tag}.prc`;
     const prcPath = path.join(lexiPath, prcFileName);
     const tmpOutputName = `vfs-decompile${tag}${parsed.ext}`;
@@ -465,7 +485,7 @@ class BRCompiledFS implements vscode.FileSystemProvider {
     const tag = String(decompileId++);
     const lexiPath = getLexiPath(this.context);
     const tmpDir = path.join(lexiPath, "tmp");
-    const parsed = path.parse(uri.path);
+    const parsed = path.parse(uri.fsPath);
     const compiledExt = EXT_MAP[parsed.ext.toLowerCase()];
     const prcFileName = `tmp/vfs-compile${tag}.prc`;
     const prcPath = path.join(lexiPath, prcFileName);
@@ -536,6 +556,9 @@ class BRCompiledFS implements vscode.FileSystemProvider {
         fs.unlinkSync(compiledFile);
       } catch {}
     }
+
+    // Write source text to disk alongside compiled file
+    fs.writeFileSync(uri.fsPath, content);
 
     // Update cache with written content and new mtime
     try {
