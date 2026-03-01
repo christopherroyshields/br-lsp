@@ -69,6 +69,7 @@ async fn run_lsp() {
         indexing_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         diagnostics_generation: Arc::new(DashMap::new()),
         diagnostics_config: Arc::new(RwLock::new(backend::DiagnosticsConfig::default())),
+        symbol_cache: DashMap::new(),
     })
     .finish();
 

@@ -1,85 +1,144 @@
 use tower_lsp::lsp_types::{DocumentSymbol, Position, Range, SymbolKind};
-use tree_sitter::Tree;
+use tree_sitter::{Node, Tree, TreeCursor};
 
-use crate::parser::{node_range, run_query};
+use crate::parser::node_range;
 
 #[allow(deprecated)]
 pub fn collect_document_symbols(tree: &Tree, source: &str) -> Vec<DocumentSymbol> {
     let mut symbols = Vec::new();
-    symbols.extend(collect_functions(tree, source));
-    symbols.extend(collect_dim_variables(tree, source));
-    symbols.extend(collect_labels(tree, source));
+    let mut cursor = tree.walk();
+    walk_symbols(&mut cursor, source, &mut symbols);
     symbols.sort_by_key(|s| (s.range.start.line, s.range.start.character));
     symbols
 }
 
 #[allow(deprecated)]
-fn collect_functions(tree: &Tree, source: &str) -> Vec<DocumentSymbol> {
-    let query = "(def_statement) @def";
-    let results = run_query(query, tree.root_node(), source);
-    let mut symbols = Vec::new();
-
-    for r in &results {
-        // Find the def_statement node to get function_name descendant
-        let def_node = match tree.root_node().named_descendant_for_point_range(
-            tree_sitter::Point::new(
-                r.range.start.line as usize,
-                r.range.start.character as usize,
-            ),
-            tree_sitter::Point::new(
-                r.range.start.line as usize,
-                r.range.start.character as usize,
-            ),
-        ) {
-            Some(n) => {
-                // Walk up to def_statement
-                let mut node = n;
-                while node.kind() != "def_statement" {
-                    match node.parent() {
-                        Some(p) => node = p,
-                        None => break,
-                    }
+fn walk_symbols(cursor: &mut TreeCursor, source: &str, symbols: &mut Vec<DocumentSymbol>) {
+    loop {
+        let node = cursor.node();
+        match node.kind() {
+            "def_statement" => {
+                if let Some(sym) = make_function_symbol(node, source) {
+                    symbols.push(sym);
                 }
-                if node.kind() == "def_statement" {
-                    node
-                } else {
-                    continue;
+                // Skip children — we already extracted what we need
+                if !cursor.goto_next_sibling() {
+                    return;
                 }
+                continue;
             }
-            None => continue,
-        };
+            "dim_statement" => {
+                collect_dim_vars(node, source, symbols);
+                // Skip children
+                if !cursor.goto_next_sibling() {
+                    return;
+                }
+                continue;
+            }
+            "label" => {
+                if let Some(sym) = make_label_symbol(node, source) {
+                    symbols.push(sym);
+                }
+                if !cursor.goto_next_sibling() {
+                    return;
+                }
+                continue;
+            }
+            _ => {}
+        }
 
-        // DFS for function_name
-        let fn_name_node = find_child_by_kind(def_node, "function_name");
-        let fn_name_node = match fn_name_node {
+        // Recurse into children
+        if cursor.goto_first_child() {
+            walk_symbols(cursor, source, symbols);
+            cursor.goto_parent();
+        }
+
+        if !cursor.goto_next_sibling() {
+            return;
+        }
+    }
+}
+
+#[allow(deprecated)]
+fn make_function_symbol(node: Node, source: &str) -> Option<DocumentSymbol> {
+    let fn_name_node = find_child_by_kind(node, "function_name")?;
+    let name = fn_name_node.utf8_text(source.as_bytes()).ok()?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(DocumentSymbol {
+        name: name.to_string(),
+        detail: Some("function".to_string()),
+        kind: SymbolKind::FUNCTION,
+        tags: None,
+        deprecated: None,
+        range: node_range(node),
+        selection_range: node_range(fn_name_node),
+        children: None,
+    })
+}
+
+#[allow(deprecated)]
+fn collect_dim_vars(node: Node, source: &str, symbols: &mut Vec<DocumentSymbol>) {
+    let mut child_cursor = node.walk();
+    for child in node.children(&mut child_cursor) {
+        let detail = match child.kind() {
+            "stringreference" => "string",
+            "numberreference" => "number",
+            "stringarray" => "stringarray",
+            "numberarray" => "numberarray",
+            _ => continue,
+        };
+        let name_node = match child.child_by_field_name("name") {
             Some(n) => n,
             None => continue,
         };
-
-        let name = match fn_name_node.utf8_text(source.as_bytes()) {
+        let name = match name_node.utf8_text(source.as_bytes()) {
             Ok(s) if !s.is_empty() => s.to_string(),
             _ => continue,
         };
-
+        let range = node_range(name_node);
         symbols.push(DocumentSymbol {
             name,
-            detail: Some("function".to_string()),
-            kind: SymbolKind::FUNCTION,
+            detail: Some(detail.to_string()),
+            kind: SymbolKind::VARIABLE,
             tags: None,
             deprecated: None,
-            range: r.range,
-            selection_range: node_range(fn_name_node),
+            range,
+            selection_range: range,
             children: None,
         });
     }
-
-    symbols
 }
 
-fn find_child_by_kind<'a>(
-    node: tree_sitter::Node<'a>,
-    kind: &str,
-) -> Option<tree_sitter::Node<'a>> {
+#[allow(deprecated)]
+fn make_label_symbol(node: Node, source: &str) -> Option<DocumentSymbol> {
+    let text = node.utf8_text(source.as_bytes()).ok()?;
+    let name = text.trim_end_matches(':').to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let range = node_range(node);
+    let selection_range = Range {
+        start: range.start,
+        end: Position {
+            line: range.end.line,
+            character: range.end.character.saturating_sub(1),
+        },
+    };
+    Some(DocumentSymbol {
+        name,
+        detail: Some("label".to_string()),
+        kind: SymbolKind::NULL,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range,
+        children: None,
+    })
+}
+
+fn find_child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         if n.kind() == kind {
@@ -91,83 +150,6 @@ fn find_child_by_kind<'a>(
         }
     }
     None
-}
-
-#[allow(deprecated)]
-fn collect_dim_variables(tree: &Tree, source: &str) -> Vec<DocumentSymbol> {
-    let queries = [
-        (
-            "(dim_statement (stringreference name: (_) @name))",
-            "string",
-        ),
-        (
-            "(dim_statement (numberreference name: (_) @name))",
-            "number",
-        ),
-        (
-            "(dim_statement (stringarray name: (_) @name))",
-            "stringarray",
-        ),
-        (
-            "(dim_statement (numberarray name: (_) @name))",
-            "numberarray",
-        ),
-    ];
-
-    let mut symbols = Vec::new();
-    for (query_str, detail) in &queries {
-        let results = run_query(query_str, tree.root_node(), source);
-        for r in &results {
-            if r.text.is_empty() {
-                continue;
-            }
-            symbols.push(DocumentSymbol {
-                name: r.text.clone(),
-                detail: Some(detail.to_string()),
-                kind: SymbolKind::VARIABLE,
-                tags: None,
-                deprecated: None,
-                range: r.range,
-                selection_range: r.range,
-                children: None,
-            });
-        }
-    }
-
-    symbols
-}
-
-#[allow(deprecated)]
-fn collect_labels(tree: &Tree, source: &str) -> Vec<DocumentSymbol> {
-    let query = "((label) @label)";
-    let results = run_query(query, tree.root_node(), source);
-
-    results
-        .into_iter()
-        .filter_map(|r| {
-            let name = r.text.trim_end_matches(':').to_string();
-            if name.is_empty() {
-                return None;
-            }
-            let selection_range = Range {
-                start: r.range.start,
-                end: Position {
-                    line: r.range.end.line,
-                    character: r.range.end.character.saturating_sub(1),
-                },
-            };
-            Some(DocumentSymbol {
-                name,
-                detail: Some("label".to_string()),
-                kind: SymbolKind::NULL,
-                tags: None,
-                deprecated: None,
-                range: r.range,
-                selection_range,
-                children: None,
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]

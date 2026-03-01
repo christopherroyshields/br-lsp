@@ -70,6 +70,7 @@ pub struct Backend {
     pub indexing_complete: Arc<AtomicBool>,
     pub diagnostics_generation: Arc<DashMap<String, Arc<AtomicU64>>>,
     pub diagnostics_config: Arc<tokio::sync::RwLock<DiagnosticsConfig>>,
+    pub symbol_cache: DashMap<String, Vec<DocumentSymbol>>,
 }
 
 struct TextDocumentItem {
@@ -217,17 +218,31 @@ impl Backend {
             Vec::new()
         };
 
+        let nodes = parser::collect_diagnostic_nodes(tree, source);
+        let defs = extract::extract_definitions_from_nodes(
+            &nodes.def_statements,
+            &nodes.library_statements,
+            source,
+        );
+
         if config.functions {
-            diagnostics.extend(diagnostics::collect_function_diagnostics(tree, source));
+            diagnostics.extend(diagnostics::collect_function_diagnostics(
+                &nodes, source, &defs,
+            ));
         }
 
         if config.unused_variables {
-            diagnostics.extend(diagnostics::check_unused_variables(tree, source));
+            diagnostics.extend(diagnostics::check_unused_variables(&nodes, source, &defs));
         }
 
         if config.undefined_functions {
             if let Some(idx) = index {
-                diagnostics.extend(diagnostics::check_undefined_functions(tree, source, idx));
+                diagnostics.extend(diagnostics::check_undefined_functions(
+                    &nodes.function_calls,
+                    source,
+                    idx,
+                    &defs,
+                ));
             }
         }
 
@@ -297,6 +312,7 @@ impl Backend {
         };
 
         let uri_string = params.uri.to_string();
+        self.symbol_cache.remove(&uri_string);
         self.document_map.insert(
             uri_string,
             DocumentState {
@@ -902,6 +918,8 @@ impl LanguageServer for Backend {
         // Drop the DashMap RefMut before awaiting (it's not Send)
         drop(doc);
 
+        self.symbol_cache.remove(&uri_string);
+
         let total_elapsed = start.elapsed();
 
         let mode = if incremental {
@@ -936,6 +954,7 @@ impl LanguageServer for Backend {
             .map(|d| d.kind == DocumentKind::Layout)
             .unwrap_or(false);
         self.document_map.remove(&uri);
+        self.symbol_cache.remove(&uri);
         if was_layout {
             let mut idx = self.layout_index.write().await;
             idx.remove(&uri);
@@ -1053,9 +1072,9 @@ impl LanguageServer for Backend {
             let is_library_fn = {
                 let index = self.workspace_index.read().await;
                 let defs = index.lookup(&name);
-                let local_non_library = defs
-                    .iter()
-                    .any(|d| d.uri.as_str() == uri_string && !d.def.is_import_only && !d.def.is_library);
+                let local_non_library = defs.iter().any(|d| {
+                    d.uri.as_str() == uri_string && !d.def.is_import_only && !d.def.is_library
+                });
                 !local_non_library && defs.iter().any(|d| d.def.is_library)
             };
 
@@ -1213,9 +1232,9 @@ impl LanguageServer for Backend {
             let is_library_fn = {
                 let index = self.workspace_index.read().await;
                 let defs = index.lookup(&name);
-                let local_non_library = defs
-                    .iter()
-                    .any(|d| d.uri.as_str() == uri_string && !d.def.is_import_only && !d.def.is_library);
+                let local_non_library = defs.iter().any(|d| {
+                    d.uri.as_str() == uri_string && !d.def.is_import_only && !d.def.is_library
+                });
                 !local_non_library && defs.iter().any(|d| d.def.is_library)
             };
 
@@ -1431,12 +1450,33 @@ impl LanguageServer for Backend {
         if self.is_layout_doc(&uri_string) {
             return Ok(None);
         }
+
+        // Check cache first
+        if let Some(cached) = self.symbol_cache.get(&uri_string) {
+            let syms = cached.value().clone();
+            if !syms.is_empty() {
+                self.client
+                    .log_message(
+                        MessageType::LOG,
+                        format!(
+                            "document_symbol: {} symbols ({:.1?}, cached)",
+                            syms.len(),
+                            start.elapsed()
+                        ),
+                    )
+                    .await;
+                return Ok(Some(DocumentSymbolResponse::Nested(syms)));
+            }
+            return Ok(None);
+        }
+
         let result = self.document_map.get(&uri_string).and_then(|doc| {
             let tree = doc.tree.as_ref()?;
             Some(symbols::collect_document_symbols(tree, &doc.source))
         });
         match result {
             Some(syms) if !syms.is_empty() => {
+                self.symbol_cache.insert(uri_string, syms.clone());
                 self.client
                     .log_message(
                         MessageType::LOG,
@@ -2190,10 +2230,7 @@ fn format_builtin_hover(builtins: &[builtins::BuiltinFunction]) -> String {
 
 fn format_user_hover_multi(defs: &[&workspace::IndexedFunctionDef]) -> String {
     // Show only the first (highest priority) non-import-only definition
-    let best = defs
-        .iter()
-        .find(|d| !d.def.is_import_only)
-        .or(defs.first());
+    let best = defs.iter().find(|d| !d.def.is_import_only).or(defs.first());
     match best {
         Some(d) => format_user_hover(&d.def),
         None => String::new(),
