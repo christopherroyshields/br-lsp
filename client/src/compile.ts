@@ -31,7 +31,7 @@ function ensureExecutable(filePath: string): void {
   }
 }
 
-function hasLineNumbers(filePath: string): boolean {
+export function hasLineNumbers(filePath: string): boolean {
   const content = fs.readFileSync(filePath, "latin1");
   const firstLine = content.split(/\r?\n/).find((line) => line.trim().length > 0);
   if (!firstLine) {
@@ -297,6 +297,88 @@ export function runBr(context: vscode.ExtensionContext, lexiPath: string, prcFil
     ensureExecutable(brlinuxPath);
     return runBrLinux(brlinuxPath, lexiPath, prcFile);
   }
+}
+
+/**
+ * Run Lexi solely to produce a .map sourcemap file for the given .brs source.
+ * Returns the path of the generated .map on success, or null on failure.
+ */
+export async function generateSourceMap(
+  sourcePath: string,
+  context: vscode.ExtensionContext,
+): Promise<string | null> {
+  const parsed = path.parse(sourcePath);
+  const lexiPath = getLexiPath(context);
+  const tmpDir = path.join(lexiPath, "tmp");
+
+  if (!fs.existsSync(tmpDir)) {
+    fs.mkdirSync(tmpDir, { recursive: true });
+  }
+
+  const tag = String(compileId++);
+  const tmpSourceBase = `${tag}_${parsed.base}`;
+  const tmpSourcePath = path.join(tmpDir, tmpSourceBase);
+  const tempFileName = `temp${tag}`;
+  const sourceMapFileName = `${tag}_${parsed.name}.map`;
+  const prcFileName = `tmp/mapgen${tag}.prc`;
+  const prcPath = path.join(lexiPath, prcFileName);
+
+  try {
+    fs.copyFileSync(sourcePath, tmpSourcePath);
+  } catch {
+    return null;
+  }
+
+  // Minimal .prc: only run Lexi to produce the sourcemap, then exit
+  const lexiEntry = hasLineNumbers(tmpSourcePath) ? "lexionly.brs" : "linenum.brs";
+  let prc = "";
+  prc += "proc noecho\n";
+  prc += `subproc ${lexiEntry}\n`;
+  prc += `00025 Infile$="tmp\\${tmpSourceBase}"\n`;
+  prc += `00026 Outfile$="tmp\\${tempFileName}"\n`;
+  prc += `00027 SourceMapFile$="tmp\\${sourceMapFileName}"\n`;
+  prc += "run\n";
+  prc += "system\n";
+
+  try {
+    fs.writeFileSync(prcPath, prc);
+  } catch {
+    return null;
+  }
+
+  try {
+    await runBr(context, lexiPath, prcFileName);
+  } catch {
+    return null;
+  } finally {
+    // Clean up tmp artifacts
+    for (const f of [
+      prcPath,
+      tmpSourcePath,
+      path.join(tmpDir, tempFileName),
+    ]) {
+      try {
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  // Copy .map to sit alongside the source file
+  const tmpMapPath = path.join(tmpDir, sourceMapFileName);
+  const finalMapPath = path.join(parsed.dir, parsed.name + ".map");
+  try {
+    if (fs.existsSync(tmpMapPath)) {
+      fs.copyFileSync(tmpMapPath, finalMapPath);
+      fs.unlinkSync(tmpMapPath);
+      return finalMapPath;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
 }
 
 export async function compileBrProgram(filename: string, context: vscode.ExtensionContext, focusOutput: boolean): Promise<boolean> {

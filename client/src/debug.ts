@@ -4,6 +4,7 @@ import * as path from "path";
 import { EventEmitter } from "events";
 import * as vscode from "vscode";
 import { buildLineMap, LineMap } from "./line-map";
+import { generateSourceMap } from "./compile";
 import {
   DebugSession,
   InitializedEvent,
@@ -329,8 +330,15 @@ export class BrDebugSession extends DebugSession {
   // Suppress global debugData → OutputEvent during init (sendCommandAndCollect handles it)
   private suppressDebugOutput = false;
 
-  public constructor() {
+  // Extension context for running Lexi
+  private context: vscode.ExtensionContext;
+
+  // Sourcemap files we generated (to clean up on disconnect)
+  private generatedMaps: string[] = [];
+
+  public constructor(context: vscode.ExtensionContext) {
     super();
+    this.context = context;
     this.setDebuggerLinesStartAt1(true);
     this.setDebuggerColumnsStartAt1(true);
   }
@@ -463,16 +471,16 @@ export class BrDebugSession extends DebugSession {
 
   // ── DAP: loadedSources ────────────────────────────────────────
 
-  protected loadedSourcesRequest(
+  protected async loadedSourcesRequest(
     response: DebugProtocol.LoadedSourcesResponse,
     _args: DebugProtocol.LoadedSourcesArguments,
-  ): void {
+  ): Promise<void> {
     const sources: Source[] = [];
     if (this.dapSource) {
       sources.push(this.dapSource);
     }
     for (const lib of this.libraries) {
-      const resolvedPath = this.resolveSourcePath(lib.path);
+      const resolvedPath = await this.resolveSourcePath(lib.path);
       sources.push(new Source(path.basename(resolvedPath), resolvedPath));
     }
     response.body = { sources };
@@ -490,7 +498,7 @@ export class BrDebugSession extends DebugSession {
     const stackText = await this.sendCommandAndCollect("status STACK >debug:262");
     this.suppressDebugOutput = false;
     this.sendEvent(new OutputEvent(`[stackTrace] collected ${stackText.length} chars\n`, "console"));
-    const frames = this.parseStackTrace(stackText);
+    const frames = await this.parseStackTrace(stackText);
     this.sendEvent(new OutputEvent(`[stackTrace] parsed ${frames.length} frames\n`, "console"));
 
     // Fall back to synthetic frame from stop position if parsing found nothing
@@ -510,7 +518,7 @@ export class BrDebugSession extends DebugSession {
   }
 
   /** Parse BR STATUS STACK output into DAP StackFrames. */
-  private parseStackTrace(text: string): StackFrame[] {
+  private async parseStackTrace(text: string): Promise<StackFrame[]> {
     const frames: StackFrame[] = [];
     const re = /(?:current\s+line|called by line)\s+(\d+):(\d+),\s*program\s+(\S+)(?:\s+in\s+(?:function\s+(\S+)|a GOSUB routine))?/gi;
     let match;
@@ -519,7 +527,7 @@ export class BrDebugSession extends DebugSession {
       const brProgram = match[3];
       const fnName = match[4] || "";
 
-      const sourcePath = this.resolveSourcePath(brProgram);
+      const sourcePath = await this.resolveSourcePath(brProgram);
 
       if (!this.lineMapBySource.has(sourcePath)) {
         this.lineMapBySource.set(sourcePath, buildLineMap(sourcePath));
@@ -654,6 +662,7 @@ export class BrDebugSession extends DebugSession {
       // ignore if already disconnected
     }
     this.connection.disconnect();
+    this.cleanupGeneratedMaps();
     this.sendResponse(response);
   }
 
@@ -669,6 +678,7 @@ export class BrDebugSession extends DebugSession {
       // ignore
     }
     this.connection.disconnect();
+    this.cleanupGeneratedMaps();
     this.sendResponse(response);
   }
 
@@ -762,16 +772,36 @@ export class BrDebugSession extends DebugSession {
   // ── Helpers ───────────────────────────────────────────────────
 
   /** Resolve a .br path to the best available source file.
-   *  Prefers .brs if it exists and has line numbers, otherwise uses .br. */
-  private resolveSourcePath(brPath: string): string {
+   *  Prefers .brs if it exists; auto-generates a .map if missing. */
+  private async resolveSourcePath(brPath: string): Promise<string> {
     const brsPath = brPath.replace(/\.br$/i, ".brs");
     if (fs.existsSync(brsPath)) {
-      const lineMap = buildLineMap(brsPath);
-      if (lineMap.brToEditor.size > 0) {
-        return brsPath;
+      // Check if a .map already exists
+      const parsed = path.parse(brsPath);
+      const mapPath = path.join(parsed.dir, parsed.name + ".map");
+      if (!fs.existsSync(mapPath)) {
+        const generated = await generateSourceMap(brsPath, this.context);
+        if (generated) {
+          this.generatedMaps.push(generated);
+        }
       }
+      return brsPath;
     }
     return brPath;
+  }
+
+  /** Delete any .map files we auto-generated during this session. */
+  private cleanupGeneratedMaps(): void {
+    for (const mapPath of this.generatedMaps) {
+      try {
+        if (fs.existsSync(mapPath)) {
+          fs.unlinkSync(mapPath);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    this.generatedMaps = [];
   }
 
   /** Run the original BR debugger's initialization command sequence, logging all output. */
@@ -800,7 +830,7 @@ export class BrDebugSession extends DebugSession {
         this.sendEvent(new OutputEvent(`> ${cmd} (${output.length} chars)\n`, "console"));
 
         if (!this.sourceFile && (cmd === "status >debug:262" || cmd === "status STACK >debug:262")) {
-          this.parseStatusOutput(output);
+          await this.parseStatusOutput(output);
         }
       } catch (err: any) {
         this.sendEvent(new OutputEvent(`> ${cmd}  [ERROR: ${err.message}]\n`, "console"));
@@ -817,15 +847,15 @@ export class BrDebugSession extends DebugSession {
     this.suppressDebugOutput = true;
     const output = await this.sendCommandAndCollect("status >debug:262");
     this.suppressDebugOutput = false;
-    this.parseStatusOutput(output);
+    await this.parseStatusOutput(output);
   }
 
   /** Parse status output to extract program path, current line/clause, and libraries. */
-  private parseStatusOutput(output: string): void {
+  private async parseStatusOutput(output: string): Promise<void> {
     const programMatch = /Program ID\s+(.+)/i.exec(output);
     if (programMatch) {
       const brPath = programMatch[1].trim();
-      const sourcePath = this.resolveSourcePath(brPath);
+      const sourcePath = await this.resolveSourcePath(brPath);
       this.sourceFile = sourcePath;
       this.sourceLineMap = buildLineMap(sourcePath);
       this.dapSource = new Source(path.basename(sourcePath), sourcePath);
@@ -858,7 +888,7 @@ export class BrDebugSession extends DebugSession {
       });
     }
     for (const lib of this.libraries) {
-      const resolvedPath = this.resolveSourcePath(lib.path);
+      const resolvedPath = await this.resolveSourcePath(lib.path);
       this.sendEvent(new LoadedSourceEvent("new", new Source(path.basename(resolvedPath), resolvedPath)));
     }
     if (this.libraries.length > 0) {
@@ -907,7 +937,7 @@ export class BrDebugSession extends DebugSession {
 export function activateDebug(context: vscode.ExtensionContext): void {
   const factory: vscode.DebugAdapterDescriptorFactory = {
     createDebugAdapterDescriptor(_session) {
-      return new vscode.DebugAdapterInlineImplementation(new BrDebugSession());
+      return new vscode.DebugAdapterInlineImplementation(new BrDebugSession(context));
     },
   };
   context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory("br", factory));
