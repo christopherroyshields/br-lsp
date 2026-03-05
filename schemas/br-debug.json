@@ -26,6 +26,10 @@
       "description": "TCP port to listen on. Run DEBUG CONNECT ip:port in BR.",
       "default": 1583
     },
+    "program": {
+      "type": "string",
+      "description": "Path to the BR source file (.brs) being debugged"
+    },
     "stopOnAttach": {
       "type": "boolean",
       "description": "Send FORCE BREAK immediately after attaching",

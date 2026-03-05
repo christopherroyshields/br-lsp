@@ -1,7 +1,9 @@
 import * as fs from "fs";
 import * as net from "net";
+import * as path from "path";
 import { EventEmitter } from "events";
 import * as vscode from "vscode";
+import { buildLineMap, LineMap } from "./line-map";
 import {
   DebugSession,
   InitializedEvent,
@@ -12,7 +14,9 @@ import {
   Scope,
   Variable,
   OutputEvent,
+  LoadedSourceEvent,
   Breakpoint,
+  Source,
 } from "@vscode/debugadapter";
 import { DebugProtocol } from "@vscode/debugadapter/lib/debugProtocol";
 
@@ -282,42 +286,6 @@ class BrConnection extends EventEmitter {
   }
 }
 
-// ── Line Map Helpers ────────────────────────────────────────────────
-
-interface LineMap {
-  /** Map from BR line number → editor line (1-based) */
-  brToEditor: Map<number, number>;
-  /** Map from editor line (1-based) → BR line number */
-  editorToBr: Map<number, number>;
-}
-
-function buildLineMap(sourcePath: string): LineMap {
-  const brToEditor = new Map<number, number>();
-  const editorToBr = new Map<number, number>();
-
-  let content: string;
-  try {
-    content = fs.readFileSync(sourcePath, "latin1");
-  } catch {
-    return { brToEditor, editorToBr };
-  }
-
-  const lines = content.split(/\r?\n/);
-  const lineNumRe = /^\s*(\d{3,5})\s/;
-
-  for (let i = 0; i < lines.length; i++) {
-    const match = lineNumRe.exec(lines[i]);
-    if (match) {
-      const brLine = parseInt(match[1], 10);
-      const editorLine = i + 1; // 1-based
-      brToEditor.set(brLine, editorLine);
-      editorToBr.set(editorLine, brLine);
-    }
-  }
-
-  return { brToEditor, editorToBr };
-}
-
 // ── BrDebugSession ──────────────────────────────────────────────────
 
 interface AttachArgs extends DebugProtocol.AttachRequestArguments {
@@ -350,6 +318,17 @@ export class BrDebugSession extends DebugSession {
   // Config
   private attachArgs: AttachArgs | undefined;
 
+  // Source file mapping (auto-discovered from STATUS)
+  private sourceFile: string | undefined;
+  private sourceLineMap: LineMap | undefined;
+  private dapSource: Source | undefined;
+
+  // Libraries discovered from STATUS
+  private libraries: { path: string; type: string; status: string; state: string; links: number }[] = [];
+
+  // Suppress global debugData → OutputEvent during init (sendCommandAndCollect handles it)
+  private suppressDebugOutput = false;
+
   public constructor() {
     super();
     this.setDebuggerLinesStartAt1(true);
@@ -368,6 +347,7 @@ export class BrDebugSession extends DebugSession {
     response.body.supportsTerminateRequest = true;
     response.body.supportsCancelRequest = false;
     response.body.supportsBreakpointLocationsRequest = false;
+    response.body.supportsLoadedSourcesRequest = true;
 
     this.sendResponse(response);
     this.sendEvent(new InitializedEvent());
@@ -481,42 +461,44 @@ export class BrDebugSession extends DebugSession {
     this.sendResponse(response);
   }
 
+  // ── DAP: loadedSources ────────────────────────────────────────
+
+  protected loadedSourcesRequest(
+    response: DebugProtocol.LoadedSourcesResponse,
+    _args: DebugProtocol.LoadedSourcesArguments,
+  ): void {
+    const sources: Source[] = [];
+    if (this.dapSource) {
+      sources.push(this.dapSource);
+    }
+    for (const lib of this.libraries) {
+      const resolvedPath = this.resolveSourcePath(lib.path);
+      sources.push(new Source(path.basename(resolvedPath), resolvedPath));
+    }
+    response.body = { sources };
+    this.sendResponse(response);
+  }
+
   // ── DAP: stackTrace ───────────────────────────────────────────
 
   protected async stackTraceRequest(
     response: DebugProtocol.StackTraceResponse,
     _args: DebugProtocol.StackTraceArguments,
   ): Promise<void> {
-    // Request stack trace from BR
-    const stackText = await this.sendCommandAndCollect("STATUS STACK >DEBUG:");
+    this.sendEvent(new OutputEvent(`[stackTrace] request received\n`, "console"));
+    this.suppressDebugOutput = true;
+    const stackText = await this.sendCommandAndCollect("status STACK >debug:262");
+    this.suppressDebugOutput = false;
+    this.sendEvent(new OutputEvent(`[stackTrace] collected ${stackText.length} chars\n`, "console"));
+    const frames = this.parseStackTrace(stackText);
+    this.sendEvent(new OutputEvent(`[stackTrace] parsed ${frames.length} frames\n`, "console"));
 
-    const frames: StackFrame[] = [];
-    if (stackText.trim()) {
-      const lines = stackText.trim().split(/\r?\n/);
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-
-        // Parse stack trace lines — format varies but typically:
-        // "ProgramName LINE nnn" or "FunctionName LINE nnn"
-        const lineMatch = /(?:LINE\s+)?(\d+)/i.exec(line);
-        const lineNum = lineMatch ? parseInt(lineMatch[1], 10) : 0;
-
-        const frame = new StackFrame(
-          i,
-          line,
-          undefined, // Source would require knowing the file path
-          lineNum,
-        );
-        frames.push(frame);
-      }
-    }
-
-    // If we have no stack frames from BR, create a synthetic one from stop position
+    // Fall back to synthetic frame from stop position if parsing found nothing
     if (frames.length === 0) {
-      const name = this.stopFunction || `Line ${this.stopLine}`;
-      const frame = new StackFrame(0, name, undefined, this.stopLine);
-      frames.push(frame);
+      const name = this.stopFunction
+        || (this.sourceFile ? path.basename(this.sourceFile) : `Line ${this.stopLine}`);
+      const editorLine = this.sourceLineMap?.brToEditor.get(this.stopLine) ?? this.stopLine;
+      frames.push(new StackFrame(0, name, this.dapSource, editorLine));
     }
 
     this.cachedStackFrames = frames;
@@ -525,6 +507,33 @@ export class BrDebugSession extends DebugSession {
       totalFrames: frames.length,
     };
     this.sendResponse(response);
+  }
+
+  /** Parse BR STATUS STACK output into DAP StackFrames. */
+  private parseStackTrace(text: string): StackFrame[] {
+    const frames: StackFrame[] = [];
+    const re = /(?:current\s+line|called by line)\s+(\d+):(\d+),\s*program\s+(\S+)(?:\s+in\s+(?:function\s+(\S+)|a GOSUB routine))?/gi;
+    let match;
+    while ((match = re.exec(text)) !== null) {
+      const brLine = parseInt(match[1], 10);
+      const brProgram = match[3];
+      const fnName = match[4] || "";
+
+      const sourcePath = this.resolveSourcePath(brProgram);
+
+      if (!this.lineMapBySource.has(sourcePath)) {
+        this.lineMapBySource.set(sourcePath, buildLineMap(sourcePath));
+      }
+      const lineMap = this.lineMapBySource.get(sourcePath)!;
+      const editorLine = lineMap.brToEditor.get(brLine) ?? brLine;
+
+      const source = new Source(path.basename(sourcePath), sourcePath);
+      const label = fnName
+        ? `${fnName} [${path.basename(sourcePath)}:${brLine}]`
+        : `${path.basename(sourcePath)}:${brLine}`;
+      frames.push(new StackFrame(frames.length, label, source, editorLine));
+    }
+    return frames;
   }
 
   // ── DAP: scopes ───────────────────────────────────────────────
@@ -580,7 +589,7 @@ export class BrDebugSession extends DebugSession {
     _args: DebugProtocol.ContinueArguments,
   ): Promise<void> {
     this.collectedVariables = [];
-    this.queueCommand("CONTINUE");
+    this.queueCommand("GO");
     response.body = { allThreadsContinued: true };
     this.sendResponse(response);
   }
@@ -617,8 +626,8 @@ export class BrDebugSession extends DebugSession {
   ): Promise<void> {
     this.collectedVariables = [];
     this.stopReason = "step";
-    // BR has no step-out; use CONTINUE as fallback
-    this.queueCommand("CONTINUE");
+    // BR has no step-out; use GO as fallback
+    this.queueCommand("GO");
     this.sendResponse(response);
   }
 
@@ -672,18 +681,22 @@ export class BrDebugSession extends DebugSession {
 
     this.connection.on("ready", () => {
       this.sendEvent(new OutputEvent("Debug session active\n", "console"));
-      if (this.attachArgs?.stopOnAttach !== false) {
-        this.connection.sendForceBreak();
-      }
+      this.runInitSequence().then(() => {
+        if (this.attachArgs?.stopOnAttach !== false) {
+          this.sendEvent(new StoppedEvent("entry", THREAD_ID));
+        }
+      });
     });
 
-    this.connection.on("enterInputMode", (_status: number, _errorCode: number) => {
+    this.connection.on("enterInputMode", (status: number, errorCode: number) => {
+      this.sendEvent(new OutputEvent(`enterInputMode: status=${status}, errorCode=${errorCode}\n`, "console"));
       if (this.debugBreakPending) {
         this.debugBreakPending = false;
         // Emit StoppedEvent once the command queue drains.
         // drainQueue() is called right after this handler returns (in handlePacket),
         // and emits "idle" if the queue is empty.
-        this.connection.once("idle", () => {
+        this.connection.once("idle", async () => {
+          await this.refreshStatus();
           this.sendEvent(new StoppedEvent(this.stopReason, THREAD_ID));
           this.stopReason = "breakpoint";
         });
@@ -709,6 +722,7 @@ export class BrDebugSession extends DebugSession {
     });
 
     this.connection.on("debugData", (_channel: number, text: string) => {
+      if (this.suppressDebugOutput) return;
       // Accumulate as output and as variables
       const trimmed = text.trim();
       if (trimmed) {
@@ -746,6 +760,116 @@ export class BrDebugSession extends DebugSession {
   }
 
   // ── Helpers ───────────────────────────────────────────────────
+
+  /** Resolve a .br path to the best available source file.
+   *  Prefers .brs if it exists and has line numbers, otherwise uses .br. */
+  private resolveSourcePath(brPath: string): string {
+    const brsPath = brPath.replace(/\.br$/i, ".brs");
+    if (fs.existsSync(brsPath)) {
+      const lineMap = buildLineMap(brsPath);
+      if (lineMap.brToEditor.size > 0) {
+        return brsPath;
+      }
+    }
+    return brPath;
+  }
+
+  /** Run the original BR debugger's initialization command sequence, logging all output. */
+  private async runInitSequence(): Promise<void> {
+    const commands = [
+      "status >debug:262",
+      "status CONFIG >debug:262",
+      "status ENV >debug:262",
+      "status ATTRI >debug:262",
+      "status SUBS >debug:262",
+      "status BREAK >debug:262",
+      "CONFIG SETENV _DEBUGGER active",
+      "status >debug:262",
+      "chdir >debug:261",
+      "status >debug:262",
+      "status FILES >debug:262",
+      "status STACK >debug:262",
+    ];
+
+    this.sendEvent(new OutputEvent("── Init sequence start ──\n", "console"));
+    this.suppressDebugOutput = true;
+
+    for (const cmd of commands) {
+      try {
+        const output = await this.sendCommandAndCollect(cmd);
+        this.sendEvent(new OutputEvent(`> ${cmd} (${output.length} chars)\n`, "console"));
+
+        if (!this.sourceFile && (cmd === "status >debug:262" || cmd === "status STACK >debug:262")) {
+          this.parseStatusOutput(output);
+        }
+      } catch (err: any) {
+        this.sendEvent(new OutputEvent(`> ${cmd}  [ERROR: ${err.message}]\n`, "console"));
+      }
+    }
+
+    this.suppressDebugOutput = false;
+    this.collectedVariables = [];
+    this.sendEvent(new OutputEvent("── Init sequence end ──\n", "console"));
+  }
+
+  /** Re-query BR status to update source file, line map, and position. */
+  private async refreshStatus(): Promise<void> {
+    this.suppressDebugOutput = true;
+    const output = await this.sendCommandAndCollect("status >debug:262");
+    this.suppressDebugOutput = false;
+    this.parseStatusOutput(output);
+  }
+
+  /** Parse status output to extract program path, current line/clause, and libraries. */
+  private parseStatusOutput(output: string): void {
+    const programMatch = /Program ID\s+(.+)/i.exec(output);
+    if (programMatch) {
+      const brPath = programMatch[1].trim();
+      const sourcePath = this.resolveSourcePath(brPath);
+      this.sourceFile = sourcePath;
+      this.sourceLineMap = buildLineMap(sourcePath);
+      this.dapSource = new Source(path.basename(sourcePath), sourcePath);
+      this.sendEvent(new LoadedSourceEvent("new", this.dapSource));
+      this.sendEvent(
+        new OutputEvent(`Auto-discovered source: ${sourcePath}\n`, "console"),
+      );
+    }
+
+    const lineMatch = /Current Line=(\d+):(\d+)/i.exec(output);
+    if (lineMatch) {
+      this.stopLine = parseInt(lineMatch[1], 10);
+      this.stopClause = parseInt(lineMatch[2], 10);
+      this.sendEvent(
+        new OutputEvent(`Current position: line ${this.stopLine}, clause ${this.stopClause}\n`, "console"),
+      );
+    }
+
+    this.libraries = [];
+    const libRe = /^(\S+)\s+(MAIN|LIBRARY)\s+(LOADED|NOT LOADED|ACTIVE)\s+(RUN|END)\s+(\d+)\s+LINKS?/gm;
+    let libMatch;
+    while ((libMatch = libRe.exec(output)) !== null) {
+      if (libMatch[2] === "MAIN") continue;
+      this.libraries.push({
+        path: libMatch[1],
+        type: libMatch[2],
+        status: libMatch[3],
+        state: libMatch[4],
+        links: parseInt(libMatch[5], 10),
+      });
+    }
+    for (const lib of this.libraries) {
+      const resolvedPath = this.resolveSourcePath(lib.path);
+      this.sendEvent(new LoadedSourceEvent("new", new Source(path.basename(resolvedPath), resolvedPath)));
+    }
+    if (this.libraries.length > 0) {
+      this.sendEvent(
+        new OutputEvent(
+          `Libraries: ${this.libraries.map((l) => `${path.basename(l.path)} (${l.status.toLowerCase()})`).join(", ")}\n`,
+          "console",
+        ),
+      );
+    }
+  }
 
   private queueCommand(command: string): void {
     this.connection.sendCommand(command).catch((err) => {

@@ -114,6 +114,7 @@ suite("generatePrc", () => {
       outputBase: "1_test",
       outputExt: ".br",
       hasNumbers: true,
+      sourceMapFile: "1_test.map",
     });
     assert.ok(prc.includes("subproc lexionly.brs"));
     assert.ok(!prc.includes("linenum.brs"));
@@ -126,6 +127,7 @@ suite("generatePrc", () => {
       outputBase: "2_test",
       outputExt: ".br",
       hasNumbers: false,
+      sourceMapFile: "2_test.map",
     });
     assert.ok(prc.includes("subproc linenum.brs"));
     assert.ok(!prc.includes("lexionly.brs"));
@@ -138,6 +140,7 @@ suite("generatePrc", () => {
       outputBase: "3_test",
       outputExt: ".br",
       hasNumbers: true,
+      sourceMapFile: "1_test.map",
     });
     assert.ok(prc.includes('Infile$="tmp\\3_test.brs"'));
     assert.ok(prc.includes('Outfile$="tmp\\temp3"'));
@@ -153,6 +156,7 @@ suite("generatePrc", () => {
       outputBase: "src",
       outputExt: ".br",
       hasNumbers: false,
+      sourceMapFile: "2_test.map",
     });
     assert.ok(prc.includes("00025 Infile$="));
     assert.ok(prc.includes("00026 Outfile$="));
@@ -165,6 +169,7 @@ suite("generatePrc", () => {
       outputBase: "x",
       outputExt: ".br",
       hasNumbers: true,
+      sourceMapFile: "1_test.map",
     });
     const lines = prc.split("\n").filter((l) => l.length > 0);
     assert.strictEqual(lines[0], "proc noecho");
@@ -181,12 +186,25 @@ suite("generatePrc", () => {
       outputBase: "f",
       outputExt: ".br",
       hasNumbers: false,
+      sourceMapFile: "2_test.map",
     });
     assert.ok(prc.includes('skip PROGRAM_REPLACE if exists("tmp\\f")'));
     assert.ok(prc.includes('skip PROGRAM_REPLACE if exists("tmp\\f.br")'));
     assert.ok(prc.includes('save "tmp\\f.br"'));
     assert.ok(prc.includes(":PROGRAM_REPLACE"));
     assert.ok(prc.includes('replace "tmp\\f.br"'));
+  });
+
+  test("passes SourceMapFile$ on line 00027", () => {
+    const prc = generatePrc({
+      sourceBase: "src.brs",
+      tempFile: "temp1",
+      outputBase: "src",
+      outputExt: ".br",
+      hasNumbers: false,
+      sourceMapFile: "src.map",
+    });
+    assert.ok(prc.includes('00027 SourceMapFile$="tmp\\src.map"'));
   });
 
   test("handles .wbs/.wb extension", () => {
@@ -196,6 +214,7 @@ suite("generatePrc", () => {
       outputBase: "page",
       outputExt: ".wb",
       hasNumbers: true,
+      sourceMapFile: "1_test.map",
     });
     assert.ok(prc.includes('Infile$="tmp\\page.wbs"'));
     assert.ok(prc.includes('save "tmp\\page.wb"'));

@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Range, Url};
 use walkdir::WalkDir;
 
-use crate::{diagnostics, parser, workspace};
+use crate::{diagnostics, extract, parser, workspace};
 
 /// A diagnostic decoupled from LSP types, usable from both CLI and server paths.
 #[derive(Debug)]
@@ -51,7 +51,15 @@ pub fn check_file(path: &Path) -> Vec<FileDiagnostic> {
     };
 
     let mut lsp_diags = parser::collect_diagnostics(&tree, &source);
-    lsp_diags.extend(diagnostics::collect_function_diagnostics(&tree, &source));
+    let nodes = parser::collect_diagnostic_nodes(&tree, &source);
+    let defs = extract::extract_definitions_from_nodes(
+        &nodes.def_statements,
+        &nodes.library_statements,
+        &source,
+    );
+    lsp_diags.extend(diagnostics::collect_function_diagnostics(
+        &nodes, &source, &defs,
+    ));
 
     let file_str = path.display().to_string();
 

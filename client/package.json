@@ -4,6 +4,7 @@
   "description": "VSCode part of the L language server",
   "license": "MIT",
   "dependencies": {
+    "@vscode/debugadapter": "^1.68.0",
     "vscode-languageclient": "9.0.1"
   },
   "devDependencies": {

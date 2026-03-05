@@ -3,6 +3,7 @@ import * as path from "path";
 import { commands, Uri, workspace, ExtensionContext, window } from "vscode";
 
 import { activateCompile } from "./compile";
+import { activateDebug } from "./debug";
 import { activateDecompile } from "./decompile";
 import { activateInspector } from "./inspector";
 import { activateLexi } from "./lexi";
@@ -113,6 +114,7 @@ export async function activate(context: ExtensionContext) {
   context.subscriptions.push(scanAllCmd);
 
   activateCompile(context);
+  activateDebug(context);
   activateDecompile(context);
   activateInspector(context, client);
   activateRun(context);
