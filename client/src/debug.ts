@@ -303,6 +303,7 @@ export class BrDebugSession extends DebugSession {
   private stopClause = 0;
   private stopFunction = "";
   private debugBreakPending = false;
+
   private stopReason = "breakpoint";
 
   // Breakpoints
@@ -582,6 +583,7 @@ export class BrDebugSession extends DebugSession {
     }
 
     const result = await this.sendCommandAndCollect(expr);
+    await this.refreshStatus();
 
     response.body = {
       result: result || "(no output)",

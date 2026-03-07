@@ -46,7 +46,7 @@ export interface PrcPaths {
   outputBase: string; // e.g. "3_test2" — compiled output name (no ext) in tmp/
   outputExt: string; // e.g. ".br"
   hasNumbers: boolean;
-  sourceMapFile: string; // e.g. "3_test2.map" — sourcemap output in tmp/
+  sourceMapFile?: string; // e.g. "3_test2.map" — sourcemap output in tmp/ (omit to skip)
 }
 
 export function generatePrc(p: PrcPaths): string {
@@ -63,7 +63,9 @@ export function generatePrc(p: PrcPaths): string {
   prc += `subproc ${lexiEntry}\n`;
   prc += `00025 Infile$="tmp\\${p.sourceBase}"\n`;
   prc += `00026 Outfile$="tmp\\${p.tempFile}"\n`;
-  prc += `00027 SourceMapFile$="tmp\\${p.sourceMapFile}"\n`;
+  if (p.sourceMapFile) {
+    prc += `00027 SourceMapFile$="tmp\\${p.sourceMapFile}"\n`;
+  }
   prc += "run\n";
   prc += "clear\n";
   prc += `subproc tmp\\${p.tempFile}\n`;
@@ -136,12 +138,13 @@ export function parseBrState(output: string): string | null {
 
 const COMPILE_TIMEOUT_MS = 30_000;
 
-function runBrLinux(brlinuxPath: string, lexiPath: string, prcFile: string): Promise<void> {
+function runBrLinux(brlinuxPath: string, lexiPath: string, prcFile: string, wbconfig: string): Promise<void> {
   // brlinux requires a PTY — use `script` to allocate one.
   // We manage stdin ourselves to respond to prompts instead of blindly piping.
   // Use absolute path with : prefix so BR finds the proc regardless of subdirectory.
   const absPrc = path.join(lexiPath, prcFile);
-  const cmd = `script -qc "LD_LIBRARY_PATH='${lexiPath}' ${LOADER} '${brlinuxPath}' 'proc :${absPrc}'" /dev/null`;
+  const wbconfigArg = wbconfig ? ` -${wbconfig}` : "";
+  const cmd = `script -qc "LD_LIBRARY_PATH='${lexiPath}' ${LOADER} '${brlinuxPath}' 'proc :${absPrc}'${wbconfigArg}" /dev/null`;
 
   return new Promise((resolve, reject) => {
     const proc = spawn("bash", ["-c", cmd], {
@@ -218,7 +221,7 @@ function runBrLinux(brlinuxPath: string, lexiPath: string, prcFile: string): Pro
   });
 }
 
-function runBrWindows(brExePath: string, lexiPath: string, prcFile: string): Promise<void> {
+function runBrWindows(brExePath: string, lexiPath: string, prcFile: string, wbconfig: string): Promise<void> {
   // Launch LexiTip to auto-dismiss the BR splash/license screen
   const lexiTipPath = path.join(lexiPath, "LexiTip.exe");
   if (fs.existsSync(lexiTipPath)) {
@@ -226,9 +229,13 @@ function runBrWindows(brExePath: string, lexiPath: string, prcFile: string): Pro
   }
 
   const absPrc = path.join(lexiPath, prcFile);
+  const args = [`proc :${absPrc}`];
+  if (wbconfig) {
+    args.push(`-${wbconfig}`);
+  }
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(brExePath, [`proc :${absPrc}`], {
+    const proc = spawn(brExePath, args, {
       cwd: lexiPath,
       stdio: "pipe",
     });
@@ -283,19 +290,33 @@ function runBrWindows(brExePath: string, lexiPath: string, prcFile: string): Pro
 }
 
 export function runBr(context: vscode.ExtensionContext, lexiPath: string, prcFile: string): Promise<void> {
+  const config = vscode.workspace.getConfiguration("br");
+  const configuredExe = config.get<string>("executable", "");
+  const wbconfig = config.get<string>("wbconfig", "");
+
   if (process.platform === "win32") {
-    const brExePath = path.join(lexiPath, "brnative.exe");
+    const brExePath = configuredExe || path.join(lexiPath, "brnative.exe");
     if (!fs.existsSync(brExePath)) {
-      return Promise.reject(new Error("brnative.exe not found in Lexi/ directory. Please add the Windows BR runtime."));
+      return Promise.reject(new Error(
+        configuredExe
+          ? `BR executable not found: ${brExePath}`
+          : "brnative.exe not found in Lexi/ directory. Please add the Windows BR runtime.",
+      ));
     }
-    return runBrWindows(brExePath, lexiPath, prcFile);
+    return runBrWindows(brExePath, lexiPath, prcFile, wbconfig);
   } else {
-    const brlinuxPath = path.join(lexiPath, "brlinux");
-    if (!fs.existsSync(brlinuxPath)) {
-      return Promise.reject(new Error("brlinux not found in Lexi/ directory. Please add the Linux BR runtime."));
+    const brExePath = configuredExe || path.join(lexiPath, "brlinux");
+    if (!fs.existsSync(brExePath)) {
+      return Promise.reject(new Error(
+        configuredExe
+          ? `BR executable not found: ${brExePath}`
+          : "brlinux not found in Lexi/ directory. Please add the Linux BR runtime.",
+      ));
     }
-    ensureExecutable(brlinuxPath);
-    return runBrLinux(brlinuxPath, lexiPath, prcFile);
+    if (!configuredExe) {
+      ensureExecutable(brExePath);
+    }
+    return runBrLinux(brExePath, lexiPath, prcFile, wbconfig);
   }
 }
 
@@ -381,7 +402,7 @@ export async function generateSourceMap(
   return null;
 }
 
-export async function compileBrProgram(filename: string, context: vscode.ExtensionContext, focusOutput: boolean): Promise<boolean> {
+export async function compileBrProgram(filename: string, context: vscode.ExtensionContext, focusOutput: boolean, generateMap = false): Promise<boolean> {
   const parsed = path.parse(filename);
   const inputExt = parsed.ext.toLowerCase();
   const outputExt = EXT_MAP[inputExt];
@@ -401,7 +422,7 @@ export async function compileBrProgram(filename: string, context: vscode.Extensi
   const tmpSourcePath = path.join(tmpDir, tmpSourceBase);
   const tempFileName = `temp${tag}`;
   const tmpOutputBase = `${tag}_${parsed.name}`;
-  const sourceMapFileName = `${tag}_${parsed.name}.map`;
+  const sourceMapFileName = generateMap ? `${tag}_${parsed.name}.map` : undefined;
   const outputFileName = parsed.name + outputExt;
   const finalOutputPath = path.join(parsed.dir, outputFileName);
   const finalMapPath = path.join(parsed.dir, parsed.name + ".map");
@@ -438,7 +459,7 @@ export async function compileBrProgram(filename: string, context: vscode.Extensi
     outputBase: tmpOutputBase,
     outputExt,
     hasNumbers,
-    sourceMapFile: sourceMapFileName,
+    ...(sourceMapFileName && { sourceMapFile: sourceMapFileName }),
   });
   try {
     fs.writeFileSync(prcPath, prcContent);
@@ -484,13 +505,14 @@ export async function compileBrProgram(filename: string, context: vscode.Extensi
     try {
       fs.copyFileSync(sourceFile, finalOutputPath);
       fs.unlinkSync(sourceFile);
-      // Copy sourcemap if generated
-      const tmpMapPath = path.join(tmpDir, sourceMapFileName);
-      if (fs.existsSync(tmpMapPath)) {
-        fs.copyFileSync(tmpMapPath, finalMapPath);
-        outputChannel.appendLine(`  Sourcemap: ${finalMapPath}`);
-      } else {
-        outputChannel.appendLine(`  Sourcemap: not generated (expected ${tmpMapPath})`);
+      if (sourceMapFileName) {
+        const tmpMapPath = path.join(tmpDir, sourceMapFileName);
+        if (fs.existsSync(tmpMapPath)) {
+          fs.copyFileSync(tmpMapPath, finalMapPath);
+          outputChannel.appendLine(`  Sourcemap: ${finalMapPath}`);
+        } else {
+          outputChannel.appendLine(`  Sourcemap: not generated (expected ${tmpMapPath})`);
+        }
       }
       const elapsed = Date.now() - startTime;
       outputChannel.appendLine(`  Result: OK (${elapsed}ms)`);
@@ -508,7 +530,9 @@ export async function compileBrProgram(filename: string, context: vscode.Extensi
   }
 
   // Clean up source and sourcemap files from tmp
-  for (const f of [tmpSourcePath, path.join(tmpDir, sourceMapFileName)]) {
+  const cleanupFiles = [tmpSourcePath];
+  if (sourceMapFileName) cleanupFiles.push(path.join(tmpDir, sourceMapFileName));
+  for (const f of cleanupFiles) {
     try {
       if (fs.existsSync(f)) {
         fs.unlinkSync(f);
@@ -562,6 +586,17 @@ export function activateCompile(context: vscode.ExtensionContext) {
         return;
       }
 
+      if (editor.document.uri.scheme === "br-compiled") {
+        // Saving a br-compiled document already compiles it
+        if (editor.document.isDirty) {
+          await editor.document.save();
+          vscode.window.showInformationMessage("Compiled (saved via virtual filesystem)");
+        } else {
+          vscode.window.showInformationMessage("No changes to compile");
+        }
+        return;
+      }
+
       const filename = editor.document.fileName;
       const ext = path.extname(filename).toLowerCase();
       if (!EXT_MAP[ext]) {
@@ -575,6 +610,31 @@ export function activateCompile(context: vscode.ExtensionContext) {
       }
 
       await compileBrProgram(filename, context, true);
+    }),
+    vscode.commands.registerCommand("br.generateSourceMap", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showErrorMessage("No active editor");
+        return;
+      }
+
+      if (editor.document.uri.scheme === "br-compiled") {
+        vscode.window.showErrorMessage("Cannot generate source map for a virtual compiled file");
+        return;
+      }
+
+      const filename = editor.document.fileName;
+      const ext = path.extname(filename).toLowerCase();
+      if (!EXT_MAP[ext]) {
+        vscode.window.showErrorMessage("Current file is not a BR source file (.brs or .wbs)");
+        return;
+      }
+
+      if (editor.document.isDirty) {
+        await editor.document.save();
+      }
+
+      await compileBrProgram(filename, context, true, true);
     }),
     vscode.commands.registerCommand("br.toggleAutoCompile", toggleAutoCompile),
     vscode.window.onDidChangeActiveTextEditor(() => updateStatusBar()),
