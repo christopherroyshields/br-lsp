@@ -5,6 +5,7 @@ import { commands, Uri, workspace, ExtensionContext, window } from "vscode";
 import { activateCompile } from "./compile";
 import { activateDebug } from "./debug";
 import { activateDecompile } from "./decompile";
+import { activateInfo } from "./info";
 import { activateInspector } from "./inspector";
 import { activateLexi } from "./lexi";
 import { activateLineNumbers } from "./line-numbers";
@@ -116,6 +117,7 @@ export async function activate(context: ExtensionContext) {
   activateCompile(context);
   activateDebug(context);
   activateDecompile(context);
+  activateInfo(context);
   activateInspector(context, client);
   activateRun(context);
   activateLexi(context);
