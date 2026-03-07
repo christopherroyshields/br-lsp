@@ -160,6 +160,10 @@
         "title": "BR: Toggle Auto-Compile on Save"
       },
       {
+        "command": "br.generateSourceMap",
+        "title": "BR: Generate Source Map"
+      },
+      {
         "command": "br.run",
         "title": "BR: Run Program"
       },
@@ -178,6 +182,10 @@
       {
         "command": "br.toggleInspector",
         "title": "BR: Toggle Tree-Sitter Inspector"
+      },
+      {
+        "command": "br.showInfo",
+        "title": "BR: Show Runtime Info"
       },
       {
         "command": "br-lsp.addLineNumbers",
@@ -416,6 +424,18 @@
           "scope": "resource",
           "default": true,
           "description": "Report unused DIM variables and unused LIBRARY imports."
+        },
+        "br.executable": {
+          "type": "string",
+          "scope": "resource",
+          "default": "",
+          "description": "Path to the BR executable used for compiling, decompiling, and Lexi preprocessing. Leave empty to use the bundled runtime."
+        },
+        "br.wbconfig": {
+          "type": "string",
+          "scope": "resource",
+          "default": "",
+          "description": "BR workstation configuration name to pass when running compile/decompile operations (e.g. 'myconfig')."
         },
         "br.decompile.sourceExtensions": {
           "type": "object",
