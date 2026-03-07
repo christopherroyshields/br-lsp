@@ -5,11 +5,12 @@ import { getLexiPath, runBr } from "./compile";
 
 let infoId = 0;
 
-function generateInfoPrc(statusFile: string, configFile: string): string {
+function generateInfoPrc(statusFile: string, configFile: string, cwdFile: string): string {
   let prc = "";
   prc += "proc noecho\n";
   prc += `status >"tmp\\${statusFile}"\n`;
   prc += `status config >"tmp\\${configFile}"\n`;
+  prc += `execute "open #1: 'tmp\\${cwdFile}',display,output : write #1,using 'form pos 1,cc 300': os_filename$('.') : close #1:"\n`;
   prc += "system\n";
   return prc;
 }
@@ -29,12 +30,14 @@ async function showRuntimeInfo(context: vscode.ExtensionContext): Promise<void> 
   const tag = String(infoId++);
   const statusFile = `info${tag}_status.txt`;
   const configFile = `info${tag}_config.txt`;
+  const cwdFile = `info${tag}_cwd.txt`;
   const prcFileName = `tmp/info${tag}.prc`;
   const prcPath = path.join(lexiPath, prcFileName);
   const statusPath = path.join(tmpDir, statusFile);
   const configPath = path.join(tmpDir, configFile);
+  const cwdPath = path.join(tmpDir, cwdFile);
 
-  const prcContent = generateInfoPrc(statusFile, configFile);
+  const prcContent = generateInfoPrc(statusFile, configFile, cwdFile);
   try {
     fs.writeFileSync(prcPath, prcContent);
   } catch (error: any) {
@@ -57,6 +60,7 @@ async function showRuntimeInfo(context: vscode.ExtensionContext): Promise<void> 
 
   let statusText = "";
   let configText = "";
+  let cwdText = "";
   try {
     if (fs.existsSync(statusPath)) {
       statusText = fs.readFileSync(statusPath, "latin1").trim();
@@ -64,11 +68,14 @@ async function showRuntimeInfo(context: vscode.ExtensionContext): Promise<void> 
     if (fs.existsSync(configPath)) {
       configText = fs.readFileSync(configPath, "latin1").trim();
     }
+    if (fs.existsSync(cwdPath)) {
+      cwdText = fs.readFileSync(cwdPath, "latin1").trim();
+    }
   } catch (error: any) {
     vscode.window.showErrorMessage(`Failed to read BR info output: ${error.message}`);
     return;
   } finally {
-    for (const f of [statusPath, configPath]) {
+    for (const f of [statusPath, configPath, cwdPath]) {
       try {
         if (fs.existsSync(f)) fs.unlinkSync(f);
       } catch {
@@ -103,12 +110,7 @@ async function showRuntimeInfo(context: vscode.ExtensionContext): Promise<void> 
   outputChannel.appendLine(`Wbconfig: ${wbconfigLabel}`);
   outputChannel.appendLine(`BR Version: ${version}`);
   outputChannel.appendLine(`OPTION 60: ${option60}`);
-  outputChannel.appendLine("");
-  outputChannel.appendLine("Status Output:");
-  outputChannel.appendLine(statusText || "(empty)");
-  outputChannel.appendLine("");
-  outputChannel.appendLine("Config Output:");
-  outputChannel.appendLine(configText || "(empty)");
+  outputChannel.appendLine(`Work Directory: ${cwdText || "(unknown)"}`);
   outputChannel.show(false);
 }
 
