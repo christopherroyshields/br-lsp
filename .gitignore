@@ -13,4 +13,4 @@ nul
 
 Lexi/tmp/*
 !Lexi/tmp/.gitkeep
-Lexi/wbserver.dat
+wbserver.dat
