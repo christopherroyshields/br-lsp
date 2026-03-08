@@ -294,6 +294,7 @@ export function runBr(context: vscode.ExtensionContext, lexiPath: string, prcFil
   const configuredExe = config.get<string>("executable", "");
   const wbconfig = config.get<string>("wbconfig", "");
 
+  let runner: Promise<void>;
   if (process.platform === "win32") {
     const brExePath = configuredExe || path.join(lexiPath, "brnative.exe");
     if (!fs.existsSync(brExePath)) {
@@ -303,7 +304,7 @@ export function runBr(context: vscode.ExtensionContext, lexiPath: string, prcFil
           : "brnative.exe not found in Lexi/ directory. Please add the Windows BR runtime.",
       ));
     }
-    return runBrWindows(brExePath, lexiPath, prcFile, wbconfig);
+    runner = runBrWindows(brExePath, lexiPath, prcFile, wbconfig);
   } else {
     const brExePath = configuredExe || path.join(lexiPath, "brlinux");
     if (!fs.existsSync(brExePath)) {
@@ -316,8 +317,12 @@ export function runBr(context: vscode.ExtensionContext, lexiPath: string, prcFil
     if (!configuredExe) {
       ensureExecutable(brExePath);
     }
-    return runBrLinux(brExePath, lexiPath, prcFile, wbconfig);
+    runner = runBrLinux(brExePath, lexiPath, prcFile, wbconfig);
   }
+
+  return runner.catch((err) => {
+    throw new Error(`${err.message} (proc: ${prcFile})`);
+  });
 }
 
 /**
