@@ -1,5 +1,42 @@
 import * as assert from "assert";
-import { parseBrOutput, parseBrState, stripAnsi, generatePrc, PrcPaths } from "../../compile";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+import { parseBrOutput, parseBrState, stripAnsi, generatePrc, hasLineNumbers } from "../../compile";
+
+suite("hasLineNumbers", () => {
+  let tmpDir: string;
+
+  setup(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "br-compile-test-"));
+  });
+
+  teardown(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeSource(content: string): string {
+    const file = path.join(tmpDir, "prog.brs");
+    fs.writeFileSync(file, content);
+    return file;
+  }
+
+  test("detects zero-padded line numbers", () => {
+    assert.strictEqual(hasLineNumbers(writeSource("00010 print a\n")), true);
+  });
+
+  test("detects short-form line numbers", () => {
+    assert.strictEqual(hasLineNumbers(writeSource("10 print a\n")), true);
+  });
+
+  test("returns false for unnumbered source", () => {
+    assert.strictEqual(hasLineNumbers(writeSource("print a\n")), false);
+  });
+
+  test("returns false for empty file", () => {
+    assert.strictEqual(hasLineNumbers(writeSource("")), false);
+  });
+});
 
 suite("parseBrOutput", () => {
   test("full error format with clause", () => {
