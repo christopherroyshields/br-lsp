@@ -100,6 +100,23 @@ impl ParamInfo {
     }
 }
 
+pub fn extract_definitions_from_nodes(
+    def_nodes: &[tree_sitter::Node],
+    library_nodes: &[tree_sitter::Node],
+    source: &str,
+) -> Vec<FunctionDef> {
+    let mut defs = Vec::new();
+    for &node in def_nodes {
+        if let Some(def) = extract_one_def(node, source) {
+            defs.push(def);
+        }
+    }
+    for &node in library_nodes {
+        collect_library_imports(node, source, &mut defs);
+    }
+    defs
+}
+
 pub fn extract_definitions(tree: &Tree, source: &str) -> Vec<FunctionDef> {
     let mut defs = Vec::new();
     let root = tree.root_node();

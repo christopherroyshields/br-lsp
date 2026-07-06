@@ -5,6 +5,9 @@ settings:
   excludeLinksFromLockfile: false
 
 dependencies:
+  '@vscode/debugadapter':
+    specifier: ^1.68.0
+    version: 1.68.0
   vscode-languageclient:
     specifier: 9.0.1
     version: 9.0.1
@@ -36,6 +39,17 @@ packages:
   /@types/vscode@1.85.0:
     resolution: {integrity: sha512-CF/RBon/GXwdfmnjZj0WTUMZN5H6YITOfBCP4iEZlOtVQXuzw6t7Le7+cR+7JzdMrnlm7Mfp49Oj2TuSXIWo3g==}
     dev: true
+
+  /@vscode/debugadapter@1.68.0:
+    resolution: {integrity: sha512-D6gk5Fw2y4FV8oYmltoXpj+VAZexxJFopN/mcZ6YcgzQE9dgq2L45Aj3GLxScJOD6GeLILcxJIaA8l3v11esGg==}
+    engines: {node: '>=14'}
+    dependencies:
+      '@vscode/debugprotocol': 1.68.0
+    dev: false
+
+  /@vscode/debugprotocol@1.68.0:
+    resolution: {integrity: sha512-2J27dysaXmvnfuhFGhfeuxfHRXunqNPxtBoR3koiTOA9rdxWNDTa1zIFLCFMSHJ9MPTPKFcBeblsyaCJCIlQxg==}
+    dev: false
 
   /@vscode/test-electron@2.5.2:
     resolution: {integrity: sha512-8ukpxv4wYe0iWMRQU18jhzJOHkeGKbnw7xWRX3Zw1WJA4cEKbHcmmLPdPrPtL6rhDcrlCZN+xKRpv09n4gRHYg==}

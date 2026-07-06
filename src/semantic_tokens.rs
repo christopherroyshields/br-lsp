@@ -390,7 +390,10 @@ mod tests {
         let mat_token = tokens
             .iter()
             .find(|t| t.token_type == 3 && t.token_modifiers_bitset == (1 << 3));
-        assert!(mat_token.is_some(), "mat in mat_statement should be keyword+controlFlow");
+        assert!(
+            mat_token.is_some(),
+            "mat in mat_statement should be keyword+controlFlow"
+        );
     }
 
     #[test]

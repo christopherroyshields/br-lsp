@@ -1,47 +1,45 @@
 use std::collections::{HashMap, HashSet};
 
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, DiagnosticTag, NumberOrString};
-use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::Node;
 
 use crate::workspace::WorkspaceIndex;
 use crate::{builtins, extract, extract::ParamKind, parser};
 
-pub fn collect_function_diagnostics(tree: &Tree, source: &str) -> Vec<Diagnostic> {
-    let mut diagnostics = check_missing_fnend(tree, source);
-    diagnostics.extend(check_duplicate_functions(tree, source));
-    diagnostics.extend(check_parameter_count(tree, source));
+pub fn collect_function_diagnostics(
+    nodes: &parser::DiagnosticNodes,
+    source: &str,
+    defs: &[extract::FunctionDef],
+) -> Vec<Diagnostic> {
+    let mut diagnostics = check_missing_fnend(
+        &nodes.def_statements,
+        &nodes.fnend_statements,
+        &nodes.end_def_statements,
+        source,
+    );
+    diagnostics.extend(check_duplicate_functions(&nodes.def_statements, source));
+    diagnostics.extend(check_parameter_count(&nodes.function_calls, source, defs));
     diagnostics
 }
 
 pub fn check_undefined_functions(
-    tree: &Tree,
+    call_nodes: &[Node],
     source: &str,
     index: &WorkspaceIndex,
+    defs: &[extract::FunctionDef],
 ) -> Vec<Diagnostic> {
-    let language = tree.language();
-    let query = match Query::new(
-        &language,
-        "(numeric_user_function) @call
-         (string_user_function) @call",
-    ) {
-        Ok(q) => q,
-        Err(_) => return Vec::new(),
-    };
-
     // Build local names set from definitions in this file
-    let local_defs = extract::extract_definitions(tree, source);
-    let local_names: HashSet<String> = local_defs
-        .iter()
-        .map(|d| d.name.to_ascii_lowercase())
-        .collect();
+    let local_names: HashSet<String> = defs.iter().map(|d| d.name.to_ascii_lowercase()).collect();
 
     let bytes = source.as_bytes();
     let mut diagnostics = Vec::new();
-    let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), bytes);
 
-    while let Some(m) = matches.next() {
-        let call_node = m.captures[0].node;
+    for &call_node in call_nodes {
+        let kind = call_node.kind();
+        // Only check user functions
+        if kind != "numeric_user_function" && kind != "string_user_function" {
+            continue;
+        }
 
         // Extract function_name child
         let name_node = match call_node
@@ -110,17 +108,12 @@ fn is_inline_def(def_node: Node) -> bool {
     false
 }
 
-fn check_missing_fnend(tree: &Tree, source: &str) -> Vec<Diagnostic> {
-    let language = tree.language();
-    let query = match Query::new(
-        &language,
-        "(def_statement) @def (fnend_statement) @fnend (end_def_statement) @enddef",
-    ) {
-        Ok(q) => q,
-        Err(_) => return Vec::new(),
-    };
-
-    // Collect all relevant nodes: (start_byte, pattern_index, node info)
+fn check_missing_fnend(
+    def_nodes: &[Node],
+    fnend_nodes: &[Node],
+    enddef_nodes: &[Node],
+    source: &str,
+) -> Vec<Diagnostic> {
     enum Entry {
         Def {
             range: tower_lsp::lsp_types::Range,
@@ -130,37 +123,31 @@ fn check_missing_fnend(tree: &Tree, source: &str) -> Vec<Diagnostic> {
     }
 
     let mut entries: Vec<(usize, Entry)> = Vec::new();
-    let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
-    while let Some(m) = matches.next() {
-        let node = m.captures[0].node;
-        match m.pattern_index {
-            0 => {
-                // def_statement — skip inline functions
-                if is_inline_def(node) {
-                    // Inline defs still close any open function
-                    entries.push((node.start_byte(), Entry::Close));
-                    continue;
-                }
-                let name = function_name_node(node)
-                    .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-                    .unwrap_or("")
-                    .to_string();
-                entries.push((
-                    node.start_byte(),
-                    Entry::Def {
-                        range: parser::node_range(node),
-                        name,
-                    },
-                ));
-            }
-            1 | 2 => {
-                // fnend_statement or end_def_statement
-                entries.push((node.start_byte(), Entry::Close));
-            }
-            _ => {}
+    for &node in def_nodes {
+        if is_inline_def(node) {
+            entries.push((node.start_byte(), Entry::Close));
+            continue;
         }
+        let name = function_name_node(node)
+            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+            .unwrap_or("")
+            .to_string();
+        entries.push((
+            node.start_byte(),
+            Entry::Def {
+                range: parser::node_range(node),
+                name,
+            },
+        ));
+    }
+
+    for &node in fnend_nodes {
+        entries.push((node.start_byte(), Entry::Close));
+    }
+
+    for &node in enddef_nodes {
+        entries.push((node.start_byte(), Entry::Close));
     }
 
     entries.sort_by_key(|(byte, _)| *byte);
@@ -199,21 +186,11 @@ fn check_missing_fnend(tree: &Tree, source: &str) -> Vec<Diagnostic> {
     diagnostics
 }
 
-fn check_duplicate_functions(tree: &Tree, source: &str) -> Vec<Diagnostic> {
-    let language = tree.language();
-    let query = match Query::new(&language, "(def_statement) @def") {
-        Ok(q) => q,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-
+fn check_duplicate_functions(def_nodes: &[Node], source: &str) -> Vec<Diagnostic> {
     // Collect (lowercase_name, display_name, function_name_range) in document order
     let mut functions: Vec<(String, String, tower_lsp::lsp_types::Range)> = Vec::new();
 
-    while let Some(m) = matches.next() {
-        let node = m.captures[0].node;
+    for &node in def_nodes {
         if let Some(name_node) = function_name_node(node) {
             let name = name_node
                 .utf8_text(source.as_bytes())
@@ -353,33 +330,21 @@ fn format_param_kind(kind: ParamKind) -> &'static str {
     }
 }
 
-fn check_parameter_count(tree: &Tree, source: &str) -> Vec<Diagnostic> {
-    let language = tree.language();
-    let query = match Query::new(
-        &language,
-        "(numeric_user_function) @call
-         (string_user_function) @call
-         (numeric_system_function) @call
-         (string_system_function) @call",
-    ) {
-        Ok(q) => q,
-        Err(_) => return Vec::new(),
-    };
-
+fn check_parameter_count(
+    call_nodes: &[Node],
+    source: &str,
+    defs: &[extract::FunctionDef],
+) -> Vec<Diagnostic> {
     // Build a map of local function definitions (lowercase name -> def)
-    let local_defs = extract::extract_definitions(tree, source);
     let mut def_map: HashMap<String, &extract::FunctionDef> = HashMap::new();
-    for def in &local_defs {
+    for def in defs {
         def_map.entry(def.name.to_ascii_lowercase()).or_insert(def);
     }
 
     let bytes = source.as_bytes();
     let mut diagnostics = Vec::new();
-    let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), bytes);
 
-    while let Some(m) = matches.next() {
-        let call_node = m.captures[0].node;
+    for &call_node in call_nodes {
         let kind = call_node.kind();
 
         // Extract function name from the function_name child
@@ -557,51 +522,56 @@ fn check_parameter_count(tree: &Tree, source: &str) -> Vec<Diagnostic> {
     diagnostics
 }
 
-pub fn check_unused_variables(tree: &Tree, source: &str) -> Vec<Diagnostic> {
-    let mut diagnostics = check_unused_dim_variables(tree, source);
-    diagnostics.extend(check_unused_library_imports(tree, source));
+pub fn check_unused_variables(
+    nodes: &parser::DiagnosticNodes,
+    source: &str,
+    defs: &[extract::FunctionDef],
+) -> Vec<Diagnostic> {
+    let mut diagnostics =
+        check_unused_dim_variables(&nodes.var_ref_names, &nodes.dim_var_ref_names, source);
+    diagnostics.extend(check_unused_library_imports(
+        &nodes.function_names,
+        source,
+        defs,
+    ));
+    diagnostics.extend(check_unused_parameters(
+        &nodes.param_ident_names,
+        &nodes.var_ref_names,
+        &nodes.def_statements,
+        &nodes.fnend_statements,
+        source,
+    ));
     diagnostics
 }
 
-fn check_unused_dim_variables(tree: &Tree, source: &str) -> Vec<Diagnostic> {
-    let root = tree.root_node();
-
-    // Query dim'd variable names
-    let dim_results = parser::run_query(
-        "(dim_statement (stringreference name: (_) @name))
-         (dim_statement (numberreference name: (_) @name))
-         (dim_statement (stringarray name: (_) @name))
-         (dim_statement (numberarray name: (_) @name))",
-        root,
-        source,
-    );
-    if dim_results.is_empty() {
+fn check_unused_dim_variables(
+    var_ref_names: &[Node],
+    dim_var_ref_names: &[Node],
+    source: &str,
+) -> Vec<Diagnostic> {
+    if dim_var_ref_names.is_empty() {
         return Vec::new();
     }
 
-    // Query ALL variable references
-    let all_results = parser::run_query(
-        "(stringreference name: (_) @name)
-         (numberreference name: (_) @name)
-         (stringarray name: (_) @name)
-         (numberarray name: (_) @name)",
-        root,
-        source,
-    );
+    let bytes = source.as_bytes();
 
     // Count total references per lowercase name
     let mut total_counts: HashMap<String, usize> = HashMap::new();
-    for r in &all_results {
-        *total_counts.entry(r.text.to_ascii_lowercase()).or_default() += 1;
+    for &node in var_ref_names {
+        if let Ok(text) = node.utf8_text(bytes) {
+            *total_counts.entry(text.to_ascii_lowercase()).or_default() += 1;
+        }
     }
 
     // Group dim entries by lowercase name
     let mut dim_entries: HashMap<String, Vec<(&str, tower_lsp::lsp_types::Range)>> = HashMap::new();
-    for r in &dim_results {
-        dim_entries
-            .entry(r.text.to_ascii_lowercase())
-            .or_default()
-            .push((&r.text, r.range));
+    for &node in dim_var_ref_names {
+        if let Ok(text) = node.utf8_text(bytes) {
+            dim_entries
+                .entry(text.to_ascii_lowercase())
+                .or_default()
+                .push((text, parser::node_range(node)));
+        }
     }
 
     let mut diagnostics = Vec::new();
@@ -624,21 +594,147 @@ fn check_unused_dim_variables(tree: &Tree, source: &str) -> Vec<Diagnostic> {
     diagnostics
 }
 
-fn check_unused_library_imports(tree: &Tree, source: &str) -> Vec<Diagnostic> {
-    let defs = extract::extract_definitions(tree, source);
+fn check_unused_parameters(
+    param_ident_names: &[Node],
+    var_ref_names: &[Node],
+    def_nodes: &[Node],
+    fnend_nodes: &[Node],
+    source: &str,
+) -> Vec<Diagnostic> {
+    if param_ident_names.is_empty() {
+        return Vec::new();
+    }
+
+    // Compute function ranges from pre-collected def + fnend nodes
+    let fn_ranges = compute_function_ranges(def_nodes, fnend_nodes);
+    if fn_ranges.is_empty() {
+        return Vec::new();
+    }
+
+    let bytes = source.as_bytes();
+
+    // Pre-lowercase all ref texts for efficient comparison
+    let refs_lower: Vec<(String, usize)> = var_ref_names
+        .iter()
+        .filter_map(|&node| {
+            node.utf8_text(bytes)
+                .ok()
+                .map(|t| (t.to_ascii_lowercase(), node.start_byte()))
+        })
+        .collect();
+
+    // Pre-extract param ident info
+    let param_info: Vec<(&str, usize, tower_lsp::lsp_types::Range)> = param_ident_names
+        .iter()
+        .filter_map(|&node| {
+            node.utf8_text(bytes)
+                .ok()
+                .map(|t| (t, node.start_byte(), parser::node_range(node)))
+        })
+        .collect();
+
+    let mut diagnostics = Vec::new();
+
+    for fr in &fn_ranges {
+        // Collect parameter identifiers in this function
+        let params: Vec<_> = param_info
+            .iter()
+            .filter(|(_, sb, _)| *sb >= fr.def_start_byte && *sb < fr.body_end_byte)
+            .collect();
+
+        if params.is_empty() {
+            continue;
+        }
+
+        // Build set of ref names within this function body (excluding param declarations)
+        let param_bytes: HashSet<usize> = params.iter().map(|(_, sb, _)| *sb).collect();
+        let mut body_ref_names: HashSet<String> = HashSet::new();
+        for (name, byte) in &refs_lower {
+            if *byte >= fr.def_start_byte && *byte < fr.body_end_byte && !param_bytes.contains(byte)
+            {
+                body_ref_names.insert(name.clone());
+            }
+        }
+
+        for (text, _, range) in &params {
+            let param_name = text.to_ascii_lowercase();
+            if !body_ref_names.contains(&param_name) {
+                diagnostics.push(Diagnostic {
+                    range: *range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    message: format!("'{text}' is declared but never used"),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    diagnostics
+}
+
+struct FunctionRange {
+    def_start_byte: usize,
+    body_end_byte: usize,
+}
+
+fn compute_function_ranges(def_nodes: &[Node], fnend_nodes: &[Node]) -> Vec<FunctionRange> {
+    // Merge def and fnend nodes by start_byte, pair them up
+    enum Entry {
+        Def(usize),
+        Fnend(usize),
+    }
+
+    let mut entries: Vec<Entry> = Vec::new();
+    for &node in def_nodes {
+        entries.push(Entry::Def(node.start_byte()));
+    }
+    for &node in fnend_nodes {
+        entries.push(Entry::Fnend(node.start_byte()));
+    }
+    entries.sort_by_key(|e| match e {
+        Entry::Def(b) | Entry::Fnend(b) => *b,
+    });
+
+    let mut ranges = Vec::new();
+    let mut pending_def: Option<usize> = None;
+    for entry in &entries {
+        match entry {
+            Entry::Def(byte) => {
+                pending_def = Some(*byte);
+            }
+            Entry::Fnend(byte) => {
+                if let Some(def_byte) = pending_def.take() {
+                    ranges.push(FunctionRange {
+                        def_start_byte: def_byte,
+                        body_end_byte: *byte,
+                    });
+                }
+            }
+        }
+    }
+    ranges
+}
+
+fn check_unused_library_imports(
+    fn_name_nodes: &[Node],
+    source: &str,
+    defs: &[extract::FunctionDef],
+) -> Vec<Diagnostic> {
     let imports: Vec<&extract::FunctionDef> = defs.iter().filter(|d| d.is_import_only).collect();
 
     if imports.is_empty() {
         return Vec::new();
     }
 
-    // Query all function_name nodes in the file
-    let all_fn_names = parser::run_query("(function_name) @name", tree.root_node(), source);
+    let bytes = source.as_bytes();
 
     // Count per lowercase name
     let mut fn_counts: HashMap<String, usize> = HashMap::new();
-    for r in &all_fn_names {
-        *fn_counts.entry(r.text.to_ascii_lowercase()).or_default() += 1;
+    for &node in fn_name_nodes {
+        if let Ok(text) = node.utf8_text(bytes) {
+            *fn_counts.entry(text.to_ascii_lowercase()).or_default() += 1;
+        }
     }
 
     let mut diagnostics = Vec::new();
@@ -663,6 +759,7 @@ fn check_unused_library_imports(tree: &Tree, source: &str) -> Vec<Diagnostic> {
 mod tests {
     use super::*;
     use crate::parser;
+    use tree_sitter::Tree;
 
     fn parse(source: &str) -> Tree {
         let mut p = parser::new_parser();
@@ -673,7 +770,13 @@ mod tests {
     fn missing_fnend_basic() {
         let source = "def fnFoo(X)\nlet Y=X*2\n";
         let tree = parse(source);
-        let diags = check_missing_fnend(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_missing_fnend(
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            &nodes.end_def_statements,
+            source,
+        );
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fnFoo"));
         assert!(diags[0].message.contains("missing FNEND"));
@@ -684,7 +787,13 @@ mod tests {
     fn inline_function_no_diagnostic() {
         let source = "def fnFoo(X)=X*2\n";
         let tree = parse(source);
-        let diags = check_missing_fnend(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_missing_fnend(
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            &nodes.end_def_statements,
+            source,
+        );
         assert!(diags.is_empty(), "inline function should not need FNEND");
     }
 
@@ -692,7 +801,13 @@ mod tests {
     fn fnend_closes_function() {
         let source = "def fnFoo(X)\nlet Y=X*2\nfnend\n";
         let tree = parse(source);
-        let diags = check_missing_fnend(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_missing_fnend(
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            &nodes.end_def_statements,
+            source,
+        );
         assert!(diags.is_empty(), "FNEND should close the function");
     }
 
@@ -700,7 +815,13 @@ mod tests {
     fn end_def_closes_function() {
         let source = "def fnFoo(X)\nlet Y=X*2\nend def\n";
         let tree = parse(source);
-        let diags = check_missing_fnend(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_missing_fnend(
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            &nodes.end_def_statements,
+            source,
+        );
         assert!(diags.is_empty(), "END DEF should close the function");
     }
 
@@ -708,7 +829,13 @@ mod tests {
     fn nested_missing_fnend() {
         let source = "def fnFoo(X)\nlet Y=X\ndef fnBar(Z)\nlet W=Z\nfnend\n";
         let tree = parse(source);
-        let diags = check_missing_fnend(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_missing_fnend(
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            &nodes.end_def_statements,
+            source,
+        );
         assert_eq!(diags.len(), 1);
         assert!(
             diags[0].message.contains("fnFoo"),
@@ -720,7 +847,8 @@ mod tests {
     fn duplicate_function() {
         let source = "def fnFoo(X)=X\ndef fnFoo(Y)=Y\n";
         let tree = parse(source);
-        let diags = check_duplicate_functions(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_duplicate_functions(&nodes.def_statements, source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fnFoo"));
         assert!(diags[0].message.contains("already defined"));
@@ -730,7 +858,8 @@ mod tests {
     fn duplicate_case_insensitive() {
         let source = "def fnFoo(X)=X\ndef FNFOO(Y)=Y\n";
         let tree = parse(source);
-        let diags = check_duplicate_functions(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_duplicate_functions(&nodes.def_statements, source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("already defined"));
     }
@@ -739,7 +868,8 @@ mod tests {
     fn no_duplicate_different_names() {
         let source = "def fnFoo(X)=X\ndef fnBar(Y)=Y\n";
         let tree = parse(source);
-        let diags = check_duplicate_functions(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_duplicate_functions(&nodes.def_statements, source);
         assert!(diags.is_empty());
     }
 
@@ -749,7 +879,9 @@ mod tests {
     fn param_count_too_few() {
         let source = "def fnFoo(A,B)=A+B\nlet X=fnFoo(1)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fnFoo"));
         assert!(diags[0].message.contains("2"));
@@ -761,7 +893,9 @@ mod tests {
     fn param_count_too_many() {
         let source = "def fnFoo(A)=A\nlet X=fnFoo(1,2)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fnFoo"));
         assert!(diags[0].message.contains("2 provided"));
@@ -771,7 +905,9 @@ mod tests {
     fn param_count_correct() {
         let source = "def fnFoo(A,B)=A+B\nlet X=fnFoo(1,2)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(diags.is_empty());
     }
 
@@ -779,7 +915,9 @@ mod tests {
     fn param_count_optional_within_range() {
         let source = "def fnFoo(A;B)\nlet X=fnFoo(1)\nfnend\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(diags.is_empty(), "1 arg is within 1-2 range");
     }
 
@@ -787,7 +925,9 @@ mod tests {
     fn param_count_optional_below_required() {
         let source = "def fnFoo(A,B;C)\nlet X=fnFoo(1)\nfnend\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("2-3"));
         assert!(diags[0].message.contains("1 provided"));
@@ -797,7 +937,9 @@ mod tests {
     fn param_count_no_parens() {
         let source = "def fnFoo(A)=A\nlet X=fnFoo\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("0 provided"));
     }
@@ -806,7 +948,9 @@ mod tests {
     fn param_count_no_params_with_args() {
         let source = "def fnConst=42\nlet X=fnConst(1)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fnConst"));
         assert!(diags[0].message.contains("1 provided"));
@@ -816,7 +960,9 @@ mod tests {
     fn param_count_builtin_correct() {
         let source = "let X=Val(\"5\")\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(diags.is_empty());
     }
 
@@ -824,7 +970,9 @@ mod tests {
     fn param_count_builtin_too_many() {
         let source = "let X=Val(\"5\",2)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("Val"));
         assert!(diags[0].message.contains("2 provided"));
@@ -834,7 +982,9 @@ mod tests {
     fn param_count_builtin_optional() {
         let source = "let X$=Date$(1)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(diags.is_empty(), "Date$ has optional second param");
     }
 
@@ -844,7 +994,9 @@ mod tests {
         // Calling with 1 arg should match the first overload
         let source = "let X$=Decrypt$(\"data\")\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(diags.is_empty(), "should match at least one overload");
     }
 
@@ -852,7 +1004,9 @@ mod tests {
     fn param_count_empty_positions() {
         let source = "def fnFoo(A,B)=A+B\nlet X=fnFoo(,)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(diags.is_empty(), "(,) counts as 2 positions");
     }
 
@@ -860,7 +1014,9 @@ mod tests {
     fn param_count_string_function() {
         let source = "def fnName$(A$)=A$\nlet X$=fnName$(\"hi\",\"extra\")\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fnName$"));
         assert!(diags[0].message.contains("2 provided"));
@@ -871,7 +1027,9 @@ mod tests {
         // udim has inline parens in the grammar, not an `arguments` field
         let source = "dim A$(3)*10\nlet X=udim(mat A$)+1\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(
             diags.is_empty(),
             "udim with inline args should not trigger diagnostic"
@@ -884,7 +1042,9 @@ mod tests {
     fn type_mismatch_string_for_numeric() {
         let source = "def fnFoo(A)=A\nlet X=fnFoo(\"hi\")\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("numeric"));
         assert!(diags[0].message.contains("string"));
@@ -895,7 +1055,9 @@ mod tests {
     fn type_mismatch_numeric_for_string() {
         let source = "def fnFoo$(A$)=A$\nlet X$=fnFoo$(42)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("string"));
         assert!(diags[0].message.contains("numeric"));
@@ -905,7 +1067,9 @@ mod tests {
     fn type_match_correct() {
         let source = "def fnFoo(A, B$)=A\nlet X=fnFoo(1, \"hi\")\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(diags.is_empty());
     }
 
@@ -913,7 +1077,9 @@ mod tests {
     fn type_array_mismatch() {
         let source = "dim B$(3)*10\ndef fnFoo(mat A)\nfnend\nlet X=fnFoo(mat B$)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("numeric array"));
         assert!(diags[0].message.contains("string array"));
@@ -923,7 +1089,9 @@ mod tests {
     fn type_scalar_vs_array() {
         let source = "dim B(3)\ndef fnFoo(A)=A\nlet X=fnFoo(mat B)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("numeric"));
         assert!(diags[0].message.contains("numeric array"));
@@ -934,7 +1102,9 @@ mod tests {
         // In BR, a scalar can be passed where an array of the same base type is expected
         let source = "def fnFoo(mat A$)\nfnend\nlet X=fnFoo(\"hi\")\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(
             diags.is_empty(),
             "scalar string for string array should be OK"
@@ -946,7 +1116,9 @@ mod tests {
         // But a numeric scalar for a string array param is still wrong
         let source = "def fnFoo(mat A$)\nfnend\nlet X=fnFoo(42)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("string array"));
         assert!(diags[0].message.contains("numeric"));
@@ -956,7 +1128,9 @@ mod tests {
     fn type_empty_position_skip() {
         let source = "def fnFoo(A, B$)=A\nlet X=fnFoo(1,)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(diags.is_empty());
     }
 
@@ -964,7 +1138,9 @@ mod tests {
     fn type_builtin_val_correct() {
         let source = "let X=Val(\"123\")\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(diags.is_empty());
     }
 
@@ -972,7 +1148,9 @@ mod tests {
     fn type_builtin_val_wrong() {
         let source = "let X=Val(42)\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("string"));
         assert!(diags[0].message.contains("numeric"));
@@ -982,7 +1160,9 @@ mod tests {
     fn type_builtin_len_correct() {
         let source = "let X=Len(\"hi\")\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(diags.is_empty());
     }
 
@@ -990,7 +1170,9 @@ mod tests {
     fn type_builtin_abs_wrong() {
         let source = "let X=Abs(\"hi\")\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("numeric"));
         assert!(diags[0].message.contains("string"));
@@ -1001,7 +1183,9 @@ mod tests {
         // Mat2Str accepts either numeric or string arrays
         let source = "dim A$(3)*10\nlet mat2str(mat A$,B$,\",\")\n";
         let tree = parse(source);
-        let diags = check_parameter_count(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_parameter_count(&nodes.function_calls, source, &defs);
         assert!(
             diags.is_empty(),
             "Mat2Str should accept string arrays: {diags:?}"
@@ -1018,7 +1202,9 @@ mod tests {
 
         let mut p = parser::new_parser();
         let tree = parser::parse(&mut p, &source, None).expect("parse failed");
-        let diags = check_parameter_count(&tree, &source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, &source);
+        let defs = extract::extract_definitions(&tree, &source);
+        let diags = check_parameter_count(&nodes.function_calls, &source, &defs);
 
         for d in &diags {
             let line = d.range.start.line + 1;
@@ -1033,8 +1219,10 @@ mod tests {
     fn undefined_function_warns() {
         let source = "let X=fnFoo(1)\n";
         let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
         let index = WorkspaceIndex::new();
-        let diags = check_undefined_functions(&tree, source, &index);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_undefined_functions(&nodes.function_calls, source, &index, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fnFoo"));
         assert!(diags[0].message.contains("not defined"));
@@ -1045,8 +1233,10 @@ mod tests {
     fn defined_locally_no_warning() {
         let source = "def fnFoo(X)=X*2\nlet Y=fnFoo(1)\n";
         let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
         let index = WorkspaceIndex::new();
-        let diags = check_undefined_functions(&tree, source, &index);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_undefined_functions(&nodes.function_calls, source, &index, &defs);
         assert!(diags.is_empty(), "locally defined function should not warn");
     }
 
@@ -1054,6 +1244,7 @@ mod tests {
     fn defined_in_workspace_no_warning() {
         let source = "let X=fnFoo(1)\n";
         let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
 
         let mut index = WorkspaceIndex::new();
         let uri = tower_lsp::lsp_types::Url::parse("file:///other.brs").unwrap();
@@ -1072,7 +1263,8 @@ mod tests {
             }],
         );
 
-        let diags = check_undefined_functions(&tree, source, &index);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_undefined_functions(&nodes.function_calls, source, &index, &defs);
         assert!(
             diags.is_empty(),
             "workspace-defined function should not warn"
@@ -1083,8 +1275,10 @@ mod tests {
     fn undefined_case_insensitive() {
         let source = "def fnfoo(X)=X\nlet Y=FNFOO(1)\n";
         let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
         let index = WorkspaceIndex::new();
-        let diags = check_undefined_functions(&tree, source, &index);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_undefined_functions(&nodes.function_calls, source, &index, &defs);
         assert!(diags.is_empty(), "case-insensitive match should not warn");
     }
 
@@ -1092,8 +1286,10 @@ mod tests {
     fn undefined_string_function() {
         let source = "let X$=fnName$(\"hi\")\n";
         let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
         let index = WorkspaceIndex::new();
-        let diags = check_undefined_functions(&tree, source, &index);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_undefined_functions(&nodes.function_calls, source, &index, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fnName$"));
         assert!(diags[0].message.contains("not defined"));
@@ -1103,8 +1299,10 @@ mod tests {
     fn library_import_not_flagged() {
         let source = "library \"rtflib.dll\": fnRTF\nlet X=fnRTF(1,2,3)\n";
         let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
         let index = WorkspaceIndex::new();
-        let diags = check_undefined_functions(&tree, source, &index);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_undefined_functions(&nodes.function_calls, source, &index, &defs);
         assert!(
             diags.is_empty(),
             "LIBRARY-imported function should not warn: {diags:?}"
@@ -1115,8 +1313,10 @@ mod tests {
     fn system_function_not_flagged() {
         let source = "let X=Val(\"5\")\n";
         let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
         let index = WorkspaceIndex::new();
-        let diags = check_undefined_functions(&tree, source, &index);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_undefined_functions(&nodes.function_calls, source, &index, &defs);
         assert!(diags.is_empty(), "system functions should not be checked");
     }
 
@@ -1126,7 +1326,9 @@ mod tests {
     fn unused_dim_variable_flagged() {
         let source = "dim A$(10)*30\n";
         let tree = parse(source);
-        let diags = check_unused_dim_variables(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags =
+            check_unused_dim_variables(&nodes.var_ref_names, &nodes.dim_var_ref_names, source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("declared but never used"));
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::HINT));
@@ -1137,7 +1339,9 @@ mod tests {
     fn used_dim_variable_not_flagged() {
         let source = "dim A$(10)*30\nlet A$(1)=\"hello\"\n";
         let tree = parse(source);
-        let diags = check_unused_dim_variables(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags =
+            check_unused_dim_variables(&nodes.var_ref_names, &nodes.dim_var_ref_names, source);
         assert!(diags.is_empty(), "used dim variable should not be flagged");
     }
 
@@ -1145,7 +1349,9 @@ mod tests {
     fn unused_dim_numeric_variable() {
         let source = "dim X(5)\n";
         let tree = parse(source);
-        let diags = check_unused_dim_variables(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags =
+            check_unused_dim_variables(&nodes.var_ref_names, &nodes.dim_var_ref_names, source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("declared but never used"));
     }
@@ -1154,7 +1360,9 @@ mod tests {
     fn used_dim_numeric_variable() {
         let source = "dim X(5)\nlet X(1)=42\n";
         let tree = parse(source);
-        let diags = check_unused_dim_variables(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags =
+            check_unused_dim_variables(&nodes.var_ref_names, &nodes.dim_var_ref_names, source);
         assert!(diags.is_empty());
     }
 
@@ -1162,7 +1370,9 @@ mod tests {
     fn unused_dim_case_insensitive() {
         let source = "dim MyVar$(3)*10\nlet MYVAR$(1)=\"test\"\n";
         let tree = parse(source);
-        let diags = check_unused_dim_variables(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags =
+            check_unused_dim_variables(&nodes.var_ref_names, &nodes.dim_var_ref_names, source);
         assert!(
             diags.is_empty(),
             "case-insensitive match should count as used"
@@ -1173,7 +1383,9 @@ mod tests {
     fn multiple_dim_one_unused() {
         let source = "dim A$(10)*30\ndim B$(5)*20\nlet A$(1)=\"hi\"\n";
         let tree = parse(source);
-        let diags = check_unused_dim_variables(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags =
+            check_unused_dim_variables(&nodes.var_ref_names, &nodes.dim_var_ref_names, source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("B$"));
     }
@@ -1182,7 +1394,9 @@ mod tests {
     fn no_dim_no_diagnostic() {
         let source = "let X=1\nprint X\n";
         let tree = parse(source);
-        let diags = check_unused_dim_variables(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags =
+            check_unused_dim_variables(&nodes.var_ref_names, &nodes.dim_var_ref_names, source);
         assert!(diags.is_empty());
     }
 
@@ -1192,7 +1406,9 @@ mod tests {
     fn unused_library_import_flagged() {
         let source = "library \"utils.dll\": fnCalc\n";
         let tree = parse(source);
-        let diags = check_unused_library_imports(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_unused_library_imports(&nodes.function_names, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fnCalc"));
         assert!(diags[0].message.contains("imported but never used"));
@@ -1204,7 +1420,9 @@ mod tests {
     fn used_library_import_not_flagged() {
         let source = "library \"utils.dll\": fnCalc\nlet X=fnCalc(1)\n";
         let tree = parse(source);
-        let diags = check_unused_library_imports(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_unused_library_imports(&nodes.function_names, source, &defs);
         assert!(diags.is_empty(), "used import should not be flagged");
     }
 
@@ -1212,7 +1430,9 @@ mod tests {
     fn mixed_library_imports() {
         let source = "library \"utils.dll\": fnCalc, fnOther\nlet X=fnCalc(1)\n";
         let tree = parse(source);
-        let diags = check_unused_library_imports(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_unused_library_imports(&nodes.function_names, source, &defs);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fnOther"));
     }
@@ -1221,7 +1441,9 @@ mod tests {
     fn library_import_case_insensitive() {
         let source = "library \"utils.dll\": fnCalc\nlet X=FNCALC(1)\n";
         let tree = parse(source);
-        let diags = check_unused_library_imports(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_unused_library_imports(&nodes.function_names, source, &defs);
         assert!(
             diags.is_empty(),
             "case-insensitive match should count as used"
@@ -1232,7 +1454,9 @@ mod tests {
     fn no_library_imports_no_diagnostic() {
         let source = "let X=1\n";
         let tree = parse(source);
-        let diags = check_unused_library_imports(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_unused_library_imports(&nodes.function_names, source, &defs);
         assert!(diags.is_empty());
     }
 
@@ -1242,9 +1466,127 @@ mod tests {
     fn check_unused_variables_combined() {
         let source = "dim A$(10)*30\nlibrary \"utils.dll\": fnCalc\nlet X=fnCalc(1)\n";
         let tree = parse(source);
-        let diags = check_unused_variables(&tree, source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let defs = extract::extract_definitions(&tree, source);
+        let diags = check_unused_variables(&nodes, source, &defs);
         // A$ is unused dim, fnCalc is used
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("A$"));
+    }
+
+    // --- Unused parameter tests ---
+
+    #[test]
+    fn unused_param_flagged() {
+        let source = "def fnFoo(X)\nlet Y = 1\nfnend\n";
+        let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_unused_parameters(
+            &nodes.param_ident_names,
+            &nodes.var_ref_names,
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            source,
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("X"));
+        assert!(diags[0].message.contains("declared but never used"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::HINT));
+        assert_eq!(diags[0].tags, Some(vec![DiagnosticTag::UNNECESSARY]));
+    }
+
+    #[test]
+    fn used_param_not_flagged() {
+        let source = "def fnFoo(X)\nlet Y = X + 1\nfnend\n";
+        let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_unused_parameters(
+            &nodes.param_ident_names,
+            &nodes.var_ref_names,
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            source,
+        );
+        assert!(diags.is_empty(), "used parameter should not be flagged");
+    }
+
+    #[test]
+    fn multiple_params_mixed() {
+        let source = "def fnFoo(X, Y)\nlet Z = X + 1\nfnend\n";
+        let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_unused_parameters(
+            &nodes.param_ident_names,
+            &nodes.var_ref_names,
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            source,
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Y"));
+    }
+
+    #[test]
+    fn unused_string_param() {
+        let source = "def fnFoo$(A$)\nlet B$ = \"hello\"\nfnend\n";
+        let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_unused_parameters(
+            &nodes.param_ident_names,
+            &nodes.var_ref_names,
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            source,
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("A$"));
+    }
+
+    #[test]
+    fn used_string_param() {
+        let source = "def fnFoo$(A$)\nlet B$ = A$\nfnend\n";
+        let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_unused_parameters(
+            &nodes.param_ident_names,
+            &nodes.var_ref_names,
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            source,
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn no_functions_no_param_diagnostic() {
+        let source = "let X = 1\nprint X\n";
+        let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_unused_parameters(
+            &nodes.param_ident_names,
+            &nodes.var_ref_names,
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            source,
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn unused_param_case_insensitive() {
+        let source = "def fnFoo(X)\nlet Y = x + 1\nfnend\n";
+        let tree = parse(source);
+        let nodes = parser::collect_diagnostic_nodes(&tree, source);
+        let diags = check_unused_parameters(
+            &nodes.param_ident_names,
+            &nodes.var_ref_names,
+            &nodes.def_statements,
+            &nodes.fnend_statements,
+            source,
+        );
+        assert!(
+            diags.is_empty(),
+            "case-insensitive reference should count as used"
+        );
     }
 }

@@ -46,6 +46,7 @@ export interface PrcPaths {
   outputBase: string; // e.g. "3_test2" — compiled output name (no ext) in tmp/
   outputExt: string; // e.g. ".br"
   hasNumbers: boolean;
+  sourceMapFile: string; // e.g. "3_test2.map" — sourcemap output in tmp/
 }
 
 export function generatePrc(p: PrcPaths): string {
@@ -62,6 +63,7 @@ export function generatePrc(p: PrcPaths): string {
   prc += `subproc ${lexiEntry}\n`;
   prc += `00025 Infile$="tmp\\${p.sourceBase}"\n`;
   prc += `00026 Outfile$="tmp\\${p.tempFile}"\n`;
+  prc += `00027 SourceMapFile$="tmp\\${p.sourceMapFile}"\n`;
   prc += "run\n";
   prc += "clear\n";
   prc += `subproc tmp\\${p.tempFile}\n`;
@@ -317,8 +319,10 @@ export async function compileBrProgram(filename: string, context: vscode.Extensi
   const tmpSourcePath = path.join(tmpDir, tmpSourceBase);
   const tempFileName = `temp${tag}`;
   const tmpOutputBase = `${tag}_${parsed.name}`;
+  const sourceMapFileName = `${tag}_${parsed.name}.map`;
   const outputFileName = parsed.name + outputExt;
   const finalOutputPath = path.join(parsed.dir, outputFileName);
+  const finalMapPath = path.join(parsed.dir, parsed.name + ".map");
 
   // Ensure tmp directory exists
   if (!fs.existsSync(tmpDir)) {
@@ -352,6 +356,7 @@ export async function compileBrProgram(filename: string, context: vscode.Extensi
     outputBase: tmpOutputBase,
     outputExt,
     hasNumbers,
+    sourceMapFile: sourceMapFileName,
   });
   try {
     fs.writeFileSync(prcPath, prcContent);
@@ -397,6 +402,14 @@ export async function compileBrProgram(filename: string, context: vscode.Extensi
     try {
       fs.copyFileSync(sourceFile, finalOutputPath);
       fs.unlinkSync(sourceFile);
+      // Copy sourcemap if generated
+      const tmpMapPath = path.join(tmpDir, sourceMapFileName);
+      if (fs.existsSync(tmpMapPath)) {
+        fs.copyFileSync(tmpMapPath, finalMapPath);
+        outputChannel.appendLine(`  Sourcemap: ${finalMapPath}`);
+      } else {
+        outputChannel.appendLine(`  Sourcemap: not generated (expected ${tmpMapPath})`);
+      }
       const elapsed = Date.now() - startTime;
       outputChannel.appendLine(`  Result: OK (${elapsed}ms)`);
     } catch (copyError: any) {
@@ -412,13 +425,15 @@ export async function compileBrProgram(filename: string, context: vscode.Extensi
     return false;
   }
 
-  // Clean up source file from tmp
-  try {
-    if (fs.existsSync(tmpSourcePath)) {
-      fs.unlinkSync(tmpSourcePath);
+  // Clean up source and sourcemap files from tmp
+  for (const f of [tmpSourcePath, path.join(tmpDir, sourceMapFileName)]) {
+    try {
+      if (fs.existsSync(f)) {
+        fs.unlinkSync(f);
+      }
+    } catch {
+      // ignore
     }
-  } catch {
-    // ignore
   }
 
   return true;

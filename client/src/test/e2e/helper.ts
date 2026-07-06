@@ -4,9 +4,9 @@ import * as path from "path";
 export async function activate(): Promise<vscode.Extension<any>> {
   // In development mode the publisher may be missing, so find the extension
   // by matching on the package name rather than a hardcoded qualified ID.
-  const ext = vscode.extensions.all.find((e) => e.id.endsWith("br-lsp"));
+  const ext = vscode.extensions.all.find((e) => e.id.endsWith("vslang-br"));
   if (!ext) {
-    throw new Error("br-lsp extension not found among installed extensions");
+    throw new Error("vslang-br extension not found among installed extensions");
   }
   if (!ext.isActive) {
     await ext.activate();

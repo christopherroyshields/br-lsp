@@ -1,5 +1,11 @@
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
+
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
-use tree_sitter::{Node, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{Language, Node, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
+
+static QUERY_CACHE: LazyLock<Mutex<HashMap<String, Arc<Query>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn new_parser() -> Parser {
     let mut parser = Parser::new();
@@ -28,10 +34,24 @@ pub struct QueryResult {
 
 pub fn run_query(query_str: &str, node: Node, source: &str) -> Vec<QueryResult> {
     let language = node.language();
-    let query = match Query::new(&language, query_str) {
-        Ok(q) => q,
-        Err(_) => return Vec::new(),
+
+    // Try to reuse a cached compiled query
+    let cached = {
+        let cache = QUERY_CACHE.lock().unwrap();
+        cache.get(query_str).cloned()
     };
+    let query = match cached {
+        Some(q) => q,
+        None => {
+            let q = match Query::new(&language, query_str) {
+                Ok(q) => Arc::new(q),
+                Err(_) => return Vec::new(),
+            };
+            let mut cache = QUERY_CACHE.lock().unwrap();
+            Arc::clone(cache.entry(query_str.to_string()).or_insert(q))
+        }
+    };
+
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, node, source.as_bytes());
     let mut results = Vec::new();
@@ -128,6 +148,83 @@ pub fn find_function_call_context(source: &str, row: usize, col: usize) -> Optio
     }
 
     None
+}
+
+pub struct DiagnosticNodes<'tree> {
+    pub def_statements: Vec<Node<'tree>>,
+    pub fnend_statements: Vec<Node<'tree>>,
+    pub end_def_statements: Vec<Node<'tree>>,
+    pub library_statements: Vec<Node<'tree>>,
+    pub function_calls: Vec<Node<'tree>>,
+    pub function_names: Vec<Node<'tree>>,
+    pub var_ref_names: Vec<Node<'tree>>,
+    pub dim_var_ref_names: Vec<Node<'tree>>,
+    pub param_ident_names: Vec<Node<'tree>>,
+}
+
+static DIAGNOSTIC_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    let language: Language = tree_sitter_br::LANGUAGE.into();
+    Query::new(
+        &language,
+        "(def_statement) @node
+         (fnend_statement) @node
+         (end_def_statement) @node
+         (library_statement) @node
+         (numeric_user_function) @node
+         (string_user_function) @node
+         (numeric_system_function) @node
+         (string_system_function) @node
+         (function_name) @node
+         (stringreference name: (_) @node)
+         (numberreference name: (_) @node)
+         (stringarray name: (_) @node)
+         (numberarray name: (_) @node)
+         (dim_statement (stringreference name: (_) @node))
+         (dim_statement (numberreference name: (_) @node))
+         (dim_statement (stringarray name: (_) @node))
+         (dim_statement (numberarray name: (_) @node))
+         (parameter (numeric_parameter (numberreference name: (numberidentifier) @node)))
+         (parameter (string_parameter (stringreference name: (stringidentifier) @node)))
+         (parameter (number_array_parameter (numberarray name: (numberidentifier) @node)))
+         (parameter (string_array_parameter (stringarray name: (stringidentifier) @node)))",
+    )
+    .expect("failed to compile diagnostic query")
+});
+
+pub fn collect_diagnostic_nodes<'tree>(tree: &'tree Tree, source: &str) -> DiagnosticNodes<'tree> {
+    let mut nodes = DiagnosticNodes {
+        def_statements: Vec::new(),
+        fnend_statements: Vec::new(),
+        end_def_statements: Vec::new(),
+        library_statements: Vec::new(),
+        function_calls: Vec::new(),
+        function_names: Vec::new(),
+        var_ref_names: Vec::new(),
+        dim_var_ref_names: Vec::new(),
+        param_ident_names: Vec::new(),
+    };
+
+    let query = &*DIAGNOSTIC_QUERY;
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
+
+    while let Some(m) = matches.next() {
+        let node = m.captures[0].node;
+        match m.pattern_index {
+            0 => nodes.def_statements.push(node),
+            1 => nodes.fnend_statements.push(node),
+            2 => nodes.end_def_statements.push(node),
+            3 => nodes.library_statements.push(node),
+            4..=7 => nodes.function_calls.push(node),
+            8 => nodes.function_names.push(node),
+            9..=12 => nodes.var_ref_names.push(node),
+            13..=16 => nodes.dim_var_ref_names.push(node),
+            17..=20 => nodes.param_ident_names.push(node),
+            _ => {}
+        }
+    }
+
+    nodes
 }
 
 pub fn collect_diagnostics(tree: &Tree, source: &str) -> Vec<Diagnostic> {
