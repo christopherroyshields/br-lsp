@@ -17,3 +17,4 @@ tsconfig.json
 justfile
 rust-toolchain.toml
 Lexi/tmp/*
+wbserver.dat
