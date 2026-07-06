@@ -109,7 +109,7 @@ checksum = "b048fb63fd8b5923fc5aa7b340d8e156aec7ec02f0c78fa8a6ddc2613f6f71de"
 
 [[package]]
 name = "br-lsp"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "dashmap 6.1.0",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-br"
-version = "0.25.7"
+version = "0.25.6"
 dependencies = [
  "cc",
  "tree-sitter-language",
