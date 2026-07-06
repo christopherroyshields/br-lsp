@@ -43,7 +43,7 @@ export function buildLineMap(sourcePath: string): LineMap {
   }
 
   const lines = content.split(/\r?\n/);
-  const lineNumRe = /^\s*(\d{3,5})\s/;
+  const lineNumRe = /^\s*(\d{1,5})\s/;
 
   for (let i = 0; i < lines.length; i++) {
     const match = lineNumRe.exec(lines[i]);

@@ -61,6 +61,17 @@ suite("buildLineMap", () => {
     assert.strictEqual(map.editorToBr.get(2), 110);
   });
 
+  test("regex fallback detects short-form line numbers", () => {
+    const source = path.join(tmpDir, "prog.brs");
+    fs.writeFileSync(source, "10 print 'hello'\n20 print 'world'\n");
+
+    const map = buildLineMap(source);
+    assert.strictEqual(map.brToEditor.get(10), 1);
+    assert.strictEqual(map.brToEditor.get(20), 2);
+    assert.strictEqual(map.editorToBr.get(1), 10);
+    assert.strictEqual(map.editorToBr.get(2), 20);
+  });
+
   test("regex fallback skips lines without numbers", () => {
     const source = path.join(tmpDir, "prog.brs");
     fs.writeFileSync(source, "! comment\n00100 print 'hello'\n\n00110 stop\n");

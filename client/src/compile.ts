@@ -37,7 +37,7 @@ export function hasLineNumbers(filePath: string): boolean {
   if (!firstLine) {
     return false;
   }
-  return /^\s*\d{3,5}\s/.test(firstLine);
+  return /^\s*\d{1,5}\s/.test(firstLine);
 }
 
 export interface PrcPaths {
@@ -138,7 +138,12 @@ export function parseBrState(output: string): string | null {
 
 const COMPILE_TIMEOUT_MS = 30_000;
 
-function runBrLinux(brlinuxPath: string, lexiPath: string, prcFile: string, wbconfig: string): Promise<void> {
+function runBrLinux(
+  brlinuxPath: string,
+  lexiPath: string,
+  prcFile: string,
+  wbconfig: string,
+): Promise<void> {
   // brlinux requires a PTY — use `script` to allocate one.
   // We manage stdin ourselves to respond to prompts instead of blindly piping.
   // Use absolute path with : prefix so BR finds the proc regardless of subdirectory.
@@ -221,7 +226,12 @@ function runBrLinux(brlinuxPath: string, lexiPath: string, prcFile: string, wbco
   });
 }
 
-function runBrWindows(brExePath: string, lexiPath: string, prcFile: string, wbconfig: string): Promise<void> {
+function runBrWindows(
+  brExePath: string,
+  lexiPath: string,
+  prcFile: string,
+  wbconfig: string,
+): Promise<void> {
   // Launch LexiTip to auto-dismiss the BR splash/license screen
   const lexiTipPath = path.join(lexiPath, "LexiTip.exe");
   if (fs.existsSync(lexiTipPath)) {
@@ -289,7 +299,11 @@ function runBrWindows(brExePath: string, lexiPath: string, prcFile: string, wbco
   });
 }
 
-export function runBr(context: vscode.ExtensionContext, lexiPath: string, prcFile: string): Promise<void> {
+export function runBr(
+  context: vscode.ExtensionContext,
+  lexiPath: string,
+  prcFile: string,
+): Promise<void> {
   const config = vscode.workspace.getConfiguration("br");
   const configuredExe = config.get<string>("executable", "");
   const wbconfig = config.get<string>("wbconfig", "");
@@ -298,21 +312,25 @@ export function runBr(context: vscode.ExtensionContext, lexiPath: string, prcFil
   if (process.platform === "win32") {
     const brExePath = configuredExe || path.join(lexiPath, "brnative.exe");
     if (!fs.existsSync(brExePath)) {
-      return Promise.reject(new Error(
-        configuredExe
-          ? `BR executable not found: ${brExePath}`
-          : "brnative.exe not found in Lexi/ directory. Please add the Windows BR runtime.",
-      ));
+      return Promise.reject(
+        new Error(
+          configuredExe
+            ? `BR executable not found: ${brExePath}`
+            : "brnative.exe not found in Lexi/ directory. Please add the Windows BR runtime.",
+        ),
+      );
     }
     runner = runBrWindows(brExePath, lexiPath, prcFile, wbconfig);
   } else {
     const brExePath = configuredExe || path.join(lexiPath, "brlinux");
     if (!fs.existsSync(brExePath)) {
-      return Promise.reject(new Error(
-        configuredExe
-          ? `BR executable not found: ${brExePath}`
-          : "brlinux not found in Lexi/ directory. Please add the Linux BR runtime.",
-      ));
+      return Promise.reject(
+        new Error(
+          configuredExe
+            ? `BR executable not found: ${brExePath}`
+            : "brlinux not found in Lexi/ directory. Please add the Linux BR runtime.",
+        ),
+      );
     }
     if (!configuredExe) {
       ensureExecutable(brExePath);
@@ -378,11 +396,7 @@ export async function generateSourceMap(
     return null;
   } finally {
     // Clean up tmp artifacts
-    for (const f of [
-      prcPath,
-      tmpSourcePath,
-      path.join(tmpDir, tempFileName),
-    ]) {
+    for (const f of [prcPath, tmpSourcePath, path.join(tmpDir, tempFileName)]) {
       try {
         if (fs.existsSync(f)) fs.unlinkSync(f);
       } catch {
@@ -407,7 +421,12 @@ export async function generateSourceMap(
   return null;
 }
 
-export async function compileBrProgram(filename: string, context: vscode.ExtensionContext, focusOutput: boolean, generateMap = false): Promise<boolean> {
+export async function compileBrProgram(
+  filename: string,
+  context: vscode.ExtensionContext,
+  focusOutput: boolean,
+  generateMap = false,
+): Promise<boolean> {
   const parsed = path.parse(filename);
   const inputExt = parsed.ext.toLowerCase();
   const outputExt = EXT_MAP[inputExt];
@@ -454,7 +473,9 @@ export async function compileBrProgram(filename: string, context: vscode.Extensi
   outputChannel.appendLine(`Compiling ${parsed.base}`);
   outputChannel.appendLine(`  Source: ${filename}`);
   outputChannel.appendLine(`  Output: ${finalOutputPath}`);
-  outputChannel.appendLine(`  Lexi: ${hasNumbers ? "preprocessing only" : "preprocessing + line numbers"}`);
+  outputChannel.appendLine(
+    `  Lexi: ${hasNumbers ? "preprocessing only" : "preprocessing + line numbers"}`,
+  );
   outputChannel.show(!focusOutput);
 
   // Generate and write .prc file
@@ -568,7 +589,9 @@ function updateStatusBar(): void {
     return;
   }
   const enabled = autoCompileState.get(editor.document.fileName) ?? false;
-  autoCompileStatusBarItem.text = enabled ? "$(check) Auto-Compile" : "$(circle-slash) Auto-Compile";
+  autoCompileStatusBarItem.text = enabled
+    ? "$(check) Auto-Compile"
+    : "$(circle-slash) Auto-Compile";
   autoCompileStatusBarItem.show();
 }
 
@@ -576,7 +599,10 @@ export function activateCompile(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel("BR Compile");
   rawOutputChannel = vscode.window.createOutputChannel("BR Compile (Raw)");
 
-  autoCompileStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  autoCompileStatusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    100,
+  );
   autoCompileStatusBarItem.command = "br.toggleAutoCompile";
   updateStatusBar();
 
