@@ -6,6 +6,7 @@
   "description": "Language server for the Business Rules (BR) programming language",
   "icon": "logo.png",
   "categories": [],
+  "repository": {"url": "https://github.com/christopherroyshields/br-lsp"},
   "keywords": [
     "br",
     "business-rules",
