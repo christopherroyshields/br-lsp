@@ -43,6 +43,12 @@ VS Code extension providing language intelligence, compile/run, and decompile su
 
 ## Getting Started
 
+### Requirements
+
+- VS Code 1.66+
+
+Windows is fully supported. Linux support is experimental.
+
 ### Development
 
 1. `pnpm i && cargo build`
