@@ -47,7 +47,7 @@ VS Code extension providing language intelligence, compile/run, and decompile su
 
 - VS Code 1.66+
 
-Windows is fully supported. Linux support is experimental.
+Windows is fully supported. Remote SSH to Linux is experimental.
 
 ### Development
 
