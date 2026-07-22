@@ -2,6 +2,12 @@
 
 All notable changes to the BR Language Extension are documented in this file.
 
+## [0.1.17] — 2026-07-22
+
+### Changed
+
+- New extension icon: retro terminal design rendered from `logo.svg`, replacing the old red logo
+
 ## [0.1.16] — 2026-07-06
 
 ### Added
