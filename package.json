@@ -2,7 +2,7 @@
   "name": "vslang-br",
   "displayName": "BR Language Extension",
   "publisher": "crs-dev",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "Language server for the Business Rules (BR) programming language",
   "icon": "logo.png",
   "categories": [],
