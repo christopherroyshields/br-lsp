@@ -43,11 +43,6 @@ VS Code extension providing language intelligence, compile/run, and decompile su
 
 ## Getting Started
 
-### Requirements
-
-- VS Code 1.66+
-- A BR runtime (`brnative.exe` or `brlinux`) for compile/run features
-
 ### Development
 
 1. `pnpm i && cargo build`
