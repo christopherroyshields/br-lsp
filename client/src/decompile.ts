@@ -10,6 +10,23 @@ export const DEFAULT_EXT_MAP: Record<string, string> = {
   ".wbo": ".wbs",
 };
 
+/**
+ * How much newer the compiled file must be before we consider the source stale.
+ *
+ * Compiling writes the .br immediately after the .brs is saved, so the compiled
+ * file is routinely a fraction of a second newer without the source being out of
+ * date. Some filesystems (FAT, network shares) also store timestamps at 2-second
+ * granularity. The warning is meant to catch "someone compiled a newer version of
+ * this source elsewhere", which implies a gap of minutes, not milliseconds — and a
+ * minute of slack matches the resolution Explorer displays timestamps at.
+ */
+export const STALE_SOURCE_TOLERANCE_MS = 60_000;
+
+/** True when the compiled file is newer than its source by more than the tolerance. */
+export function isSourceStale(compiledMtimeMs: number, sourceMtimeMs: number): boolean {
+  return compiledMtimeMs - sourceMtimeMs > STALE_SOURCE_TOLERANCE_MS;
+}
+
 function getExtMap(): Record<string, string> {
   const config = vscode.workspace.getConfiguration("br");
   return config.get<Record<string, string>>("decompile.sourceExtensions", DEFAULT_EXT_MAP);
@@ -670,7 +687,7 @@ export function activateDecompile(context: vscode.ExtensionContext) {
       return;
     }
 
-    if (compiledMtime <= sourceMtime) return;
+    if (!isSourceStale(compiledMtime, sourceMtime)) return;
 
     const key = document.uri.toString();
     if (warnedUris.has(key)) return;

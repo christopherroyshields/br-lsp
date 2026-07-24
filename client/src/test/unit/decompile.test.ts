@@ -7,6 +7,8 @@ import {
   generateDecompilePrc,
   generateBatchDecompilePrc,
   findFilesRecursive,
+  isSourceStale,
+  STALE_SOURCE_TOLERANCE_MS,
 } from "../../decompile";
 
 suite("DEFAULT_EXT_MAP", () => {
@@ -28,6 +30,38 @@ suite("DEFAULT_EXT_MAP", () => {
 
   test("has exactly 4 entries", () => {
     assert.strictEqual(Object.keys(DEFAULT_EXT_MAP).length, 4);
+  });
+});
+
+suite("isSourceStale", () => {
+  const base = 1_700_000_000_000;
+
+  test("identical timestamps are not stale", () => {
+    assert.strictEqual(isSourceStale(base, base), false);
+  });
+
+  test("compiled older than source is not stale", () => {
+    assert.strictEqual(isSourceStale(base - 5_000, base), false);
+  });
+
+  test("compiled newer by milliseconds is not stale", () => {
+    assert.strictEqual(isSourceStale(base + 250, base), false);
+  });
+
+  test("compiled newer by coarse filesystem granularity is not stale", () => {
+    assert.strictEqual(isSourceStale(base + 2_000, base), false);
+  });
+
+  test("exactly at the tolerance is not stale", () => {
+    assert.strictEqual(isSourceStale(base + STALE_SOURCE_TOLERANCE_MS, base), false);
+  });
+
+  test("just past the tolerance is stale", () => {
+    assert.strictEqual(isSourceStale(base + STALE_SOURCE_TOLERANCE_MS + 1, base), true);
+  });
+
+  test("compiled newer by an hour is stale", () => {
+    assert.strictEqual(isSourceStale(base + 3_600_000, base), true);
   });
 });
 
