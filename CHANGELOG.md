@@ -2,6 +2,12 @@
 
 All notable changes to the BR Language Extension are documented in this file.
 
+## [0.1.18] — 2026-07-24
+
+### Fixed
+
+- False "source file may be out of date" warning: the compiled file was flagged as newer than its source on a sub-second timestamp difference, which happens routinely because compiling writes the `.br` right after the `.brs` is saved. The check now allows a one-minute tolerance ([#4](https://github.com/christopherroyshields/br-lsp/issues/4))
+
 ## [0.1.17] — 2026-07-22
 
 ### Changed
