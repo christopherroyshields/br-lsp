@@ -106,12 +106,15 @@ Add a `br` configuration to `.vscode/launch.json`:
 
 | Property | Description |
 |----------|-------------|
+| `name` | Label shown when choosing between configurations. |
 | `executable` | Path to BR executable. Omit to use the bundled runtime selected by `br.runtimeVersion`. |
 | `wbconfig` | Path to wbconfig file (passed as `-[filename]`). |
 | `wsid` | Workstation ID (e.g. `42`, `42+`, `21+5`, `WSIDCLEAR`). |
 | `cwd` | Working directory. Defaults to `${fileDirname}`. |
 
-All properties support VS Code variables: `${workspaceFolder}`, `${extensionPath}`, `${file}`, `${fileBasename}`, `${fileDirname}`.
+`executable`, `wbconfig`, and `cwd` support VS Code variables: `${workspaceFolder}`, `${extensionPath}`, `${file}`, `${fileDirname}`, `${fileBasename}`, `${fileBasenameNoExtension}`. A path that is still relative after substitution is resolved against the workspace root. `wsid` is passed to BR verbatim — variables are not expanded there.
+
+With more than one `br` configuration, **BR: Select Launch Configuration** picks the active one, and the choice is remembered per workspace. **BR: Run Program** prompts on first use if nothing has been picked yet.
 
 ## Keybindings
 
