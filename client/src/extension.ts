@@ -11,6 +11,7 @@ import { activateLineNumbers } from "./line-numbers";
 import { activateNextPrev } from "./next-prev";
 import { activateProcSearch } from "./proc-search";
 import { activateRun } from "./run";
+import { activateRuntime } from "./runtime";
 import {
   Executable,
   LanguageClient,
@@ -113,6 +114,7 @@ export async function activate(context: ExtensionContext) {
   });
   context.subscriptions.push(scanAllCmd);
 
+  activateRuntime(context);
   activateCompile(context);
   activateDecompile(context);
   activateInfo(context);

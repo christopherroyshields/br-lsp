@@ -10,6 +10,7 @@ import {
   parseBrOutput,
   parseBrState,
 } from "./compile";
+import { bundledRuntimeFile, getRuntimeVersion } from "./runtime";
 
 const LOADER = "/lib64/ld-linux-x86-64.so.2";
 const ACTIVE_LAUNCH_CONFIG_KEY = "br.activeLaunchConfig";
@@ -25,10 +26,10 @@ interface BrLaunchConfiguration {
 }
 
 function getDefaultLaunchConfig(): BrLaunchConfiguration {
-  const executable =
-    process.platform === "win32"
-      ? "${extensionPath}/Lexi/brnative.exe"
-      : "${extensionPath}/Lexi/brlinux";
+  // Follows br.runtimeVersion; kept in ${extensionPath} form so resolveVariables
+  // still owns expansion. An explicit "executable" in launch.json overrides this.
+  const bundled = bundledRuntimeFile(getRuntimeVersion(), process.platform) ?? "brlinux";
+  const executable = `\${extensionPath}/Lexi/${bundled}`;
   return {
     type: "br",
     request: "launch",

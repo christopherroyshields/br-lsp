@@ -23,7 +23,8 @@ VS Code extension providing language intelligence, compile/run, and decompile su
 - Auto-compile on save with status bar toggle
 - Run with integrated terminal (`Ctrl+Shift+R`)
 - Launch configurations via `.vscode/launch.json`
-- Cross-platform: Windows (`brnative.exe`) and Linux (`brlinux`)
+- Selectable bundled runtime: BR 4.3 or BR 4.2, from the status bar
+- Cross-platform: Windows (`brnative.exe`, `brnative.42.exe`) and Linux (`brlinux`)
 
 ### Decompile
 
@@ -66,9 +67,21 @@ Windows is fully supported. Remote SSH to Linux is experimental.
 | `br.diagnostics.functions` | `boolean` | `true` | Report function diagnostics |
 | `br.diagnostics.undefinedFunctions` | `boolean` | `true` | Report undefined function calls |
 | `br.diagnostics.unusedVariables` | `boolean` | `true` | Report unused DIM variables and LIBRARY imports |
+| `br.runtimeVersion` | `string` | `"4.3"` | Bundled BR runtime used to compile and run (`"4.3"` or `"4.2"`) |
+| `br.executable` | `string` | `""` | Path to a BR executable. Overrides `br.runtimeVersion` |
+| `br.wbconfig` | `string` | `""` | Wbconfig passed to compile/decompile operations |
 | `br.decompile.sourceExtensions` | `object` | `{".br":".brs", ...}` | Compiled → source extension mapping |
 | `br.decompile.styleCommand` | `string` | `"indent 2 45 keywords lower..."` | Style command applied after decompiling |
 | `br.trace.server` | `string` | `"off"` | Trace communication with the language server |
+
+## Runtime Version
+
+The extension bundles two BR runtimes. The status bar shows which one is active — click it (or run **BR: Select Runtime Version**) to switch between **BR 4.3** and **BR 4.2**. The choice is stored in `br.runtimeVersion` and applies to everything that spawns BR: compile, run, decompile, line numbering, proc search, and **BR: Show Runtime Info**.
+
+- BR 4.2 is bundled for Windows only; the bundled Linux runtime is 4.3.
+- Setting `br.executable` overrides the selection entirely — the status bar then reads `BR (custom)`.
+- An explicit `executable` in a `br` launch configuration overrides it for **BR: Run** only, so a launch config that pins a runtime can compile with one version and run with another. Omit `executable` to follow the setting.
+- Compiled `.br`/`.wb` objects are version-specific; recompile after switching.
 
 ## Launch Configuration
 
@@ -82,7 +95,7 @@ Add a `br` configuration to `.vscode/launch.json`:
       "type": "br",
       "request": "launch",
       "name": "Run BR",
-      "executable": "${extensionPath}/Lexi/brnative.exe",
+      "executable": "",
       "wbconfig": "",
       "wsid": "",
       "cwd": "${fileDirname}"
@@ -93,7 +106,7 @@ Add a `br` configuration to `.vscode/launch.json`:
 
 | Property | Description |
 |----------|-------------|
-| `executable` | Path to BR executable. Defaults to bundled `brnative.exe`. |
+| `executable` | Path to BR executable. Omit to use the bundled runtime selected by `br.runtimeVersion`. |
 | `wbconfig` | Path to wbconfig file (passed as `-[filename]`). |
 | `wsid` | Workstation ID (e.g. `42`, `42+`, `21+5`, `WSIDCLEAR`). |
 | `cwd` | Working directory. Defaults to `${fileDirname}`. |

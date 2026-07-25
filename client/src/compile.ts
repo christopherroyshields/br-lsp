@@ -2,6 +2,9 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import { spawn } from "child_process";
+import { getLexiPath, resolveRuntime } from "./runtime";
+
+export { getLexiPath };
 
 const LOADER = "/lib64/ld-linux-x86-64.so.2";
 // Strip ANSI escape sequences and terminal control codes from PTY output
@@ -18,10 +21,6 @@ export const EXT_MAP: Record<string, string> = {
   ".brs": ".br",
   ".wbs": ".wb",
 };
-
-export function getLexiPath(context: vscode.ExtensionContext): string {
-  return path.join(context.extensionPath, "Lexi");
-}
 
 function ensureExecutable(filePath: string): void {
   try {
@@ -289,7 +288,7 @@ function runBrWindows(
       if (brError) {
         settle(new Error(brError));
       } else if (code !== 0) {
-        settle(new Error(stderr.trim() || `brnative.exe exited with code ${code}`));
+        settle(new Error(stderr.trim() || `${path.basename(brExePath)} exited with code ${code}`));
       } else {
         settle();
       }
@@ -305,41 +304,26 @@ export function runBr(
   prcFile: string,
 ): Promise<void> {
   const config = vscode.workspace.getConfiguration("br");
-  const configuredExe = config.get<string>("executable", "");
   const wbconfig = config.get<string>("wbconfig", "");
+
+  const runtime = resolveRuntime(lexiPath);
+  if (runtime.error) {
+    return Promise.reject(new Error(runtime.error));
+  }
 
   let runner: Promise<void>;
   if (process.platform === "win32") {
-    const brExePath = configuredExe || path.join(lexiPath, "brnative.exe");
-    if (!fs.existsSync(brExePath)) {
-      return Promise.reject(
-        new Error(
-          configuredExe
-            ? `BR executable not found: ${brExePath}`
-            : "brnative.exe not found in Lexi/ directory. Please add the Windows BR runtime.",
-        ),
-      );
-    }
-    runner = runBrWindows(brExePath, lexiPath, prcFile, wbconfig);
+    runner = runBrWindows(runtime.path, lexiPath, prcFile, wbconfig);
   } else {
-    const brExePath = configuredExe || path.join(lexiPath, "brlinux");
-    if (!fs.existsSync(brExePath)) {
-      return Promise.reject(
-        new Error(
-          configuredExe
-            ? `BR executable not found: ${brExePath}`
-            : "brlinux not found in Lexi/ directory. Please add the Linux BR runtime.",
-        ),
-      );
+    if (runtime.bundled) {
+      ensureExecutable(runtime.path);
     }
-    if (!configuredExe) {
-      ensureExecutable(brExePath);
-    }
-    runner = runBrLinux(brExePath, lexiPath, prcFile, wbconfig);
+    runner = runBrLinux(runtime.path, lexiPath, prcFile, wbconfig);
   }
 
+  const label = runtime.bundled ? `BR ${runtime.version}` : path.basename(runtime.path);
   return runner.catch((err) => {
-    throw new Error(`${err.message} (proc: ${prcFile})`);
+    throw new Error(`${err.message} (proc: ${prcFile}, ${label})`);
   });
 }
 

@@ -2,7 +2,7 @@
   "name": "vslang-br",
   "displayName": "BR Language Extension",
   "publisher": "crs-dev",
-  "version": "0.1.18",
+  "version": "0.1.20",
   "description": "Language server for the Business Rules (BR) programming language",
   "icon": "logo.png",
   "categories": [],
@@ -187,6 +187,10 @@
       {
         "command": "br.showInfo",
         "title": "BR: Show Runtime Info"
+      },
+      {
+        "command": "br.selectRuntimeVersion",
+        "title": "BR: Select Runtime Version"
       },
       {
         "command": "br-lsp.addLineNumbers",
@@ -426,11 +430,25 @@
           "default": true,
           "description": "Report unused DIM variables and unused LIBRARY imports."
         },
+        "br.runtimeVersion": {
+          "type": "string",
+          "scope": "window",
+          "enum": [
+            "4.3",
+            "4.2"
+          ],
+          "enumDescriptions": [
+            "Bundled BR 4.3 runtime.",
+            "Bundled BR 4.2 runtime (Windows only)."
+          ],
+          "default": "4.3",
+          "markdownDescription": "Which bundled BR runtime to compile and run with. BR 4.2 is bundled for Windows only; on Linux the bundled 4.3 runtime is used. Ignored when `#br.executable#` is set."
+        },
         "br.executable": {
           "type": "string",
           "scope": "resource",
           "default": "",
-          "description": "Path to the BR executable used for compiling, decompiling, and Lexi preprocessing. Leave empty to use the bundled runtime."
+          "description": "Path to the BR executable used for compiling, decompiling, and Lexi preprocessing. Leave empty to use the bundled runtime selected by br.runtimeVersion."
         },
         "br.wbconfig": {
           "type": "string",

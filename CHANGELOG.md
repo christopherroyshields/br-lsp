@@ -2,6 +2,37 @@
 
 All notable changes to the BR Language Extension are documented in this file.
 
+## [0.1.20] — 2026-07-25
+
+### Added
+
+- Selectable BR runtime version. **BR: Select Runtime Version** (or the new status bar item) switches between the bundled BR 4.3 and BR 4.2 runtimes, stored in the `br.runtimeVersion` setting. The selection applies to everything that spawns BR — compile, run, decompile, add/strip line numbers, proc search, sourcemap generation, and Show Runtime Info. This restores the capability vslang-br had as "Lexi: Set BR Version", without copying files over the extension's install directory
+- `Lexi/brnative.42.exe` — the BR 4.2 Windows runtime is bundled again. BR 4.2 is Windows-only; the bundled Linux runtime remains 4.3
+
+### Changed
+
+- **BR: Show Runtime Info** now reports the executable actually resolved by the compile pipeline and the selected runtime, instead of recomputing a label that could disagree with what ran
+- `br` launch configurations no longer default `executable` to a hard-coded `brnative.exe` path — omit it to follow `br.runtimeVersion`. An explicit `executable` still overrides, for **BR: Run** only
+- `br.executable` continues to override everything; the status bar shows `BR (custom)` when it is set
+
+### Removed
+
+- `Lexi/brnative.43` — a byte-identical duplicate of the bundled 4.3 runtime that nothing referenced (−2.7 MB)
+
+### Note
+
+Compiled `.br`/`.wb` objects are version-specific. After switching runtime versions, recompile before running or decompiling.
+
+## [0.1.19] — 2026-07-25
+
+### Fixed
+
+- `OPTION 60` removed from the bundled `wbconfig.sys`. It is a BR 4.1-and-earlier compatibility switch and was enabled by mistake in 0.1.16, when the old per-version wbconfig profiles (`wbconfig.s41`/`wbconfig.s42`) were merged into a single file — only the 4.1 profile had ever set it. With it on, programs using 4.2/4.3-only features failed to compile
+
+### Changed
+
+- **BR: Show Runtime Info** now explains what `OPTION 60: ON` means, for anyone whose `br.wbconfig` points at a copy of the old bundled file
+
 ## [0.1.18] — 2026-07-24
 
 ### Fixed

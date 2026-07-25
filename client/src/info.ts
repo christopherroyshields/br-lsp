@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import { getLexiPath, runBr } from "./compile";
+import { getRuntimeVersion, resolveRuntime } from "./runtime";
 
 let infoId = 0;
 
@@ -16,7 +17,6 @@ function generateInfoPrc(statusFile: string, configFile: string): string {
 
 async function showRuntimeInfo(context: vscode.ExtensionContext): Promise<void> {
   const config = vscode.workspace.getConfiguration("br");
-  const configuredExe = config.get<string>("executable", "");
   const configuredWbconfig = config.get<string>("wbconfig", "");
 
   const lexiPath = getLexiPath(context);
@@ -91,18 +91,33 @@ async function showRuntimeInfo(context: vscode.ExtensionContext): Promise<void> 
     option60 = option60Match[1].toUpperCase();
   }
 
-  const exeLabel = configuredExe || (process.platform === "win32"
-    ? path.join(lexiPath, "brnative.exe") + " (bundled)"
-    : path.join(lexiPath, "brlinux") + " (bundled)");
+  // Same resolver runBr used to launch, so this reports what actually ran.
+  const runtime = resolveRuntime(lexiPath);
+  const exeLabel = runtime.bundled
+    ? `${runtime.path} (bundled BR ${runtime.version})`
+    : `${runtime.path} (br.executable override)`;
+  const runtimeLabel = runtime.bundled
+    ? runtime.version
+    : `(br.executable override — br.runtimeVersion "${getRuntimeVersion()}" not in effect)`;
   const wbconfigLabel = configuredWbconfig || "(bundled default)";
 
   const outputChannel = vscode.window.createOutputChannel("BR Runtime Info");
   outputChannel.clear();
   outputChannel.appendLine("=== BR Runtime Info ===");
   outputChannel.appendLine(`Executable: ${exeLabel}`);
+  outputChannel.appendLine(`Selected Runtime: ${runtimeLabel}`);
   outputChannel.appendLine(`Wbconfig: ${wbconfigLabel}`);
   outputChannel.appendLine(`BR Version: ${version}`);
   outputChannel.appendLine(`OPTION 60: ${option60}`);
+  if (option60 === "ON") {
+    outputChannel.appendLine(
+      "  Warning: OPTION 60 restricts syntax to BR 4.1 and earlier; programs using",
+    );
+    outputChannel.appendLine(
+      "  4.2/4.3-only features will fail to compile. Remove `option 60` from the",
+    );
+    outputChannel.appendLine("  wbconfig above to compile with the full 4.3 syntax.");
+  }
   outputChannel.show(false);
 }
 

@@ -21,8 +21,8 @@
     },
     "executable": {
       "type": "string",
-      "description": "Path to BR executable. Can use variables: ${workspaceFolder}, ${extensionPath}, ${file}, ${fileBasename}. Defaults to ${extensionPath}/Lexi/brnative.exe",
-      "default": "${extensionPath}/Lexi/brnative.exe"
+      "description": "Path to BR executable. Can use variables: ${workspaceFolder}, ${extensionPath}, ${file}, ${fileBasename}. Leave empty to use the bundled runtime selected by the br.runtimeVersion setting.",
+      "default": ""
     },
     "wbconfig": {
       "type": "string",
