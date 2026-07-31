@@ -1,98 +1,413 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <defs>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 256 256"
+   version="1.1"
+   id="svg31"
+   sodipodi:docname="logo.svg"
+   inkscape:version="1.4.4 (dcaf3e7, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview31"
+     pagecolor="#ffffff"
+     bordercolor="#111111"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="1"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="3.1523438"
+     inkscape:cx="128"
+     inkscape:cy="128"
+     inkscape:window-width="2560"
+     inkscape:window-height="1009"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg31" />
+  <defs
+     id="defs2">
+    <linearGradient
+       id="linearGradient31"
+       inkscape:swatch="gradient">
+      <stop
+         style="stop-color:#5d808e;stop-opacity:1;"
+         offset="0"
+         id="stop32" />
+      <stop
+         style="stop-color:#5d808e;stop-opacity:0;"
+         offset="1"
+         id="stop33" />
+    </linearGradient>
+    <linearGradient
+       id="swatch31"
+       inkscape:swatch="solid">
+      <stop
+         style="stop-color:#000000;stop-opacity:1;"
+         offset="0"
+         id="stop31" />
+    </linearGradient>
     <!-- Noise/speckle texture -->
-    <filter id="noise">
-      <feTurbulence type="fractalNoise" baseFrequency="0.55" numOctaves="3" stitchTiles="stitch" result="noise"/>
-      <feColorMatrix in="noise" type="saturate" values="0" result="gray-noise"/>
-      <feBlend in="SourceGraphic" in2="gray-noise" mode="multiply" result="noisy"/>
+    <filter
+       id="noise"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feTurbulence
+         type="fractalNoise"
+         baseFrequency="0.55"
+         numOctaves="3"
+         stitchTiles="stitch"
+         result="noise"
+         id="feTurbulence1" />
+      <feColorMatrix
+         in="noise"
+         type="saturate"
+         values="0"
+         result="gray-noise"
+         id="feColorMatrix1" />
+      <feBlend
+         in="SourceGraphic"
+         in2="gray-noise"
+         mode="multiply"
+         result="noisy"
+         id="feBlend1" />
     </filter>
     <!-- Clip path using scaled BR letter shapes -->
-    <clipPath id="br-letters">
+    <clipPath
+       id="br-letters">
       <!-- B letter -->
-      <path transform="translate(40, 52)" d="
-        M 0,0 L 55,0 Q 70,0 70,20 Q 70,35 58,39
-        Q 73,43 73,63 Q 73,82 55,82 L 0,82 Z
-        M 20,16 L 20,33 L 47,33 Q 53,33 53,25 Q 53,16 47,16 Z
-        M 20,49 L 20,66 L 50,66 Q 56,66 56,58 Q 56,49 50,49 Z
-      "/>
+      <path
+         transform="translate(40, 52)"
+         d="         M 0,0 L 55,0 Q 70,0 70,20 Q 70,35 58,39         Q 73,43 73,63 Q 73,82 55,82 L 0,82 Z         M 20,16 L 20,33 L 47,33 Q 53,33 53,25 Q 53,16 47,16 Z         M 20,49 L 20,66 L 50,66 Q 56,66 56,58 Q 56,49 50,49 Z       "
+         id="path1" />
       <!-- R letter -->
-      <path transform="translate(125, 52)" d="
-        M 0,0 L 55,0 Q 73,0 73,28 Q 73,45 60,50 L 78,82 L 56,82 L 40,53 L 20,53 L 20,82 L 0,82 Z
-        M 20,16 L 20,38 L 48,38 Q 55,38 55,27 Q 55,16 48,16 Z
-      "/>
+      <path
+         transform="translate(125, 52)"
+         d="         M 0,0 L 55,0 Q 73,0 73,28 Q 73,45 60,50 L 78,82 L 56,82 L 40,53 L 20,53 L 20,82 L 0,82 Z         M 20,16 L 20,38 L 48,38 Q 55,38 55,27 Q 55,16 48,16 Z       "
+         id="path2" />
     </clipPath>
   </defs>
-
   <!-- ╔══════════════════════════════════════╗ -->
   <!-- Terminal window border using line-draw style -->
   <!-- Double-line outer border -->
-  <g fill="none" stroke="#599D8E" stroke-width="2">
-    <!-- Outer box -->
-    <line x1="12" y1="10" x2="244" y2="10"/>
-    <line x1="12" y1="12" x2="244" y2="12"/>
-    <line x1="12" y1="246" x2="244" y2="246"/>
-    <line x1="12" y1="244" x2="244" y2="244"/>
-    <line x1="10" y1="12" x2="10" y2="244"/>
-    <line x1="12" y1="12" x2="12" y2="244"/>
-    <line x1="246" y1="12" x2="246" y2="244"/>
-    <line x1="244" y1="12" x2="244" y2="244"/>
-  </g>
   <!-- Corner pieces ╔ ╗ ╚ ╝ -->
-  <g fill="#599D8E">
-    <!-- Top-left ╔ -->
-    <rect x="10" y="10" width="4" height="2"/>
-    <rect x="10" y="12" width="2" height="2"/>
-    <!-- Top-right ╗ -->
-    <rect x="242" y="10" width="4" height="2"/>
-    <rect x="244" y="12" width="2" height="2"/>
-    <!-- Bottom-left ╚ -->
-    <rect x="10" y="244" width="4" height="2"/>
-    <rect x="10" y="242" width="2" height="2"/>
-    <!-- Bottom-right ╝ -->
-    <rect x="242" y="244" width="4" height="2"/>
-    <rect x="244" y="242" width="2" height="2"/>
+  <rect
+     style="display:inline;opacity:0.79019074;fill:#1a1a1a;fill-opacity:1;stroke:none;stroke-width:3.66614;stroke-linecap:round;stroke-linejoin:round;stroke-opacity:1;paint-order:stroke markers fill"
+     id="rect41"
+     width="233.47708"
+     height="233.47708"
+     x="10.785625"
+     y="11.10285" />
+  <g
+     fill="none"
+     stroke="#599D8E"
+     stroke-width="2"
+     id="g9"
+     style="display:inline;opacity:0.9386921;fill:none;fill-opacity:1;stroke:#599d8e;stroke-opacity:1">
+    <!-- Outer box -->
+    <line
+       x1="12"
+       y1="10"
+       x2="244"
+       y2="10"
+       id="line2"
+       style="fill:none;fill-opacity:1;stroke:#599d8e;stroke-opacity:1" />
+    <line
+       x1="12"
+       y1="12"
+       x2="244"
+       y2="12"
+       id="line3"
+       style="fill:none;fill-opacity:1;stroke:#599d8e;stroke-opacity:1" />
+    <line
+       x1="12"
+       y1="246"
+       x2="244"
+       y2="246"
+       id="line4"
+       style="fill:none;fill-opacity:1;stroke:#599d8e;stroke-opacity:1" />
+    <line
+       x1="12"
+       y1="244"
+       x2="244"
+       y2="244"
+       id="line5"
+       style="fill:none;fill-opacity:1;stroke:#599d8e;stroke-opacity:1" />
+    <line
+       x1="10"
+       y1="12"
+       x2="10"
+       y2="244"
+       id="line6"
+       style="fill:none;fill-opacity:1;stroke:#599d8e;stroke-opacity:1" />
+    <line
+       x1="12"
+       y1="12"
+       x2="12"
+       y2="244"
+       id="line7"
+       style="fill:none;fill-opacity:1;stroke:#599d8e;stroke-opacity:1" />
+    <line
+       x1="246"
+       y1="12"
+       x2="246"
+       y2="244"
+       id="line8"
+       style="fill:none;fill-opacity:1;stroke:#599d8e;stroke-opacity:1" />
+    <line
+       x1="244"
+       y1="12"
+       x2="244"
+       y2="244"
+       id="line9"
+       style="fill:none;fill-opacity:1;stroke:#599d8e;stroke-opacity:1" />
   </g>
-
+  <g
+     fill="#599D8E"
+     id="g16">
+    <!-- Top-left ╔ -->
+    <rect
+       x="10"
+       y="10"
+       width="4"
+       height="2"
+       id="rect9" />
+    <rect
+       x="10"
+       y="12"
+       width="2"
+       height="2"
+       id="rect10" />
+    <!-- Top-right ╗ -->
+    <rect
+       x="242"
+       y="10"
+       width="4"
+       height="2"
+       id="rect11" />
+    <rect
+       x="244"
+       y="12"
+       width="2"
+       height="2"
+       id="rect12" />
+    <!-- Bottom-left ╚ -->
+    <rect
+       x="10"
+       y="244"
+       width="4"
+       height="2"
+       id="rect13" />
+    <rect
+       x="10"
+       y="242"
+       width="2"
+       height="2"
+       id="rect14" />
+    <!-- Bottom-right ╝ -->
+    <rect
+       x="242"
+       y="244"
+       width="4"
+       height="2"
+       id="rect15" />
+    <rect
+       x="244"
+       y="242"
+       width="2"
+       height="2"
+       id="rect16" />
+  </g>
   <!-- Title bar ═══╡ BR Extension ╞═══ -->
   <!-- Horizontal double line for title bar separator -->
-  <line x1="12" y1="30" x2="244" y2="30" stroke="#599D8E" stroke-width="1"/>
-  <line x1="12" y1="32" x2="244" y2="32" stroke="#599D8E" stroke-width="1"/>
+  <line
+     x1="12"
+     y1="30"
+     x2="244"
+     y2="30"
+     stroke="#599D8E"
+     stroke-width="1"
+     id="line16" />
+  <line
+     x1="12"
+     y1="32"
+     x2="244"
+     y2="32"
+     stroke="#599D8E"
+     stroke-width="1"
+     id="line17" />
   <!-- Title bar text -->
-  <text x="128" y="25" text-anchor="middle" font-family="monospace, 'Courier New'" font-size="10" fill="#7AC3B7"> BR Extension </text>
+  <text
+     x="68.679054"
+     y="25"
+     text-anchor="middle"
+     font-family="monospace, 'Courier New'"
+     font-size="10px"
+     fill="#7ac3b7"
+     id="text17"
+     style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:System-ui;-inkscape-font-specification:System-ui">BR Language Extension</text>
   <!-- ╞ ╡ brackets around title -->
-  <line x1="52" y1="28" x2="52" y2="34" stroke="#599D8E" stroke-width="1"/>
-  <line x1="50" y1="30" x2="52" y2="30" stroke="#599D8E" stroke-width="1"/>
-  <line x1="50" y1="32" x2="52" y2="32" stroke="#599D8E" stroke-width="1"/>
-  <line x1="204" y1="28" x2="204" y2="34" stroke="#599D8E" stroke-width="1"/>
-  <line x1="204" y1="30" x2="206" y2="30" stroke="#599D8E" stroke-width="1"/>
-  <line x1="204" y1="32" x2="206" y2="32" stroke="#599D8E" stroke-width="1"/>
-
+  <line
+     x1="52"
+     y1="28"
+     x2="52"
+     y2="34"
+     stroke="#599D8E"
+     stroke-width="1"
+     id="line18" />
+  <line
+     x1="50"
+     y1="30"
+     x2="52"
+     y2="30"
+     stroke="#599D8E"
+     stroke-width="1"
+     id="line19" />
+  <line
+     x1="50"
+     y1="32"
+     x2="52"
+     y2="32"
+     stroke="#599D8E"
+     stroke-width="1"
+     id="line20" />
+  <line
+     x1="204"
+     y1="28"
+     x2="204"
+     y2="34"
+     stroke="#599D8E"
+     stroke-width="1"
+     id="line21" />
+  <line
+     x1="204"
+     y1="30"
+     x2="206"
+     y2="30"
+     stroke="#599D8E"
+     stroke-width="1"
+     id="line22" />
+  <line
+     x1="204"
+     y1="32"
+     x2="206"
+     y2="32"
+     stroke="#599D8E"
+     stroke-width="1"
+     id="line23" />
   <!-- Stripes clipped to the BR letter shapes -->
-  <g clip-path="url(#br-letters)">
+  <g
+     clip-path="url(#br-letters)"
+     id="g29"
+     transform="translate(10.468401,32.991326)">
     <!-- Red -->
-    <rect x="0" y="52" width="256" height="10" fill="#E71E2D"/>
+    <rect
+       x="0"
+       y="52"
+       width="256"
+       height="10"
+       fill="#e71e2d"
+       id="rect23" />
     <!-- Orange -->
-    <rect x="0" y="66" width="256" height="10" fill="#EA7138"/>
+    <rect
+       x="0"
+       y="66"
+       width="256"
+       height="10"
+       fill="#ea7138"
+       id="rect24" />
     <!-- Gold -->
-    <rect x="0" y="80" width="256" height="10" fill="#cfa044"/>
+    <rect
+       x="0"
+       y="80"
+       width="256"
+       height="10"
+       fill="#cfa044"
+       id="rect25" />
     <!-- Sage -->
-    <rect x="0" y="94" width="256" height="10" fill="#7AC3B7"/>
+    <rect
+       x="0"
+       y="94"
+       width="256"
+       height="10"
+       fill="#7ac3b7"
+       id="rect26" />
     <!-- Teal -->
-    <rect x="0" y="108" width="256" height="10" fill="#599D8E"/>
+    <rect
+       x="0"
+       y="108"
+       width="256"
+       height="10"
+       fill="#599d8e"
+       id="rect27" />
     <!-- Dark teal -->
-    <rect x="0" y="122" width="256" height="10" fill="#336E62"/>
-
+    <rect
+       x="0"
+       y="122"
+       width="256"
+       height="10"
+       fill="#336e62"
+       id="rect28" />
     <!-- Grain overlay inside the letters -->
-    <rect x="0" y="52" width="256" height="90" filter="url(#noise)" opacity="0.12" fill="white"/>
+    <rect
+       x="0"
+       y="52"
+       width="256"
+       height="90"
+       filter="url(#noise)"
+       opacity="0.12"
+       fill="#ffffff"
+       id="rect29" />
   </g>
-
   <!-- Extension subtitle -->
-  <text x="128" y="148" text-anchor="middle" font-family="monospace, 'Courier New'" font-size="11" font-weight="bold" letter-spacing="5" fill="#62b0a0" opacity="0.8">EXTENSION</text>
-
+  <text
+     x="138.4684"
+     y="180.99133"
+     text-anchor="middle"
+     font-family="monospace, 'Courier New'"
+     font-size="11px"
+     font-weight="bold"
+     letter-spacing="5"
+     fill="#62b0a0"
+     opacity="0.8"
+     id="text29">EXTENSION</text>
   <!-- Bottom status bar separator -->
-  <line x1="12" y1="224" x2="244" y2="224" stroke="#599D8E" stroke-width="1"/>
-  <line x1="12" y1="226" x2="244" y2="226" stroke="#599D8E" stroke-width="1"/>
+  <line
+     x1="12"
+     y1="224"
+     x2="244"
+     y2="224"
+     stroke="#599D8E"
+     stroke-width="1"
+     id="line29" />
+  <line
+     x1="12"
+     y1="226"
+     x2="244"
+     y2="226"
+     stroke="#599D8E"
+     stroke-width="1"
+     id="line30" />
   <!-- Status bar text -->
-  <text x="24" y="239" font-family="monospace, 'Courier New'" font-size="8" fill="#599D8E" opacity="0.6">F1=Help</text>
-  <text x="232" y="239" text-anchor="end" font-family="monospace, 'Courier New'" font-size="8" fill="#599D8E" opacity="0.6">1:1</text>
+  <text
+     x="24"
+     y="239"
+     font-family="monospace, 'Courier New'"
+     font-size="8"
+     fill="#599D8E"
+     opacity="0.6"
+     id="text30">F1=Help</text>
+  <text
+     x="232"
+     y="239"
+     text-anchor="end"
+     font-family="monospace, 'Courier New'"
+     font-size="8px"
+     fill="#599d8e"
+     opacity="0.6"
+     id="text31">10:01</text>
 </svg>
