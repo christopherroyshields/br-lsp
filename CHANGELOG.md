@@ -2,6 +2,12 @@
 
 All notable changes to the BR Language Extension are documented in this file.
 
+## [0.1.22] — 2026-07-31
+
+### Changed
+
+- Updated extension icon
+
 ## [0.1.21] — 2026-07-31
 
 First stable release since 0.1.17, rolling up the 0.1.18–0.1.20 pre-releases below.
